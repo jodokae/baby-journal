@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it } from 'vitest';
 import App from './App';
+import { db } from './db';
 import { toDayKey } from './lib/dates';
 
 const now = new Date();
@@ -72,4 +73,39 @@ it('keeps the month and the selected day when returning from the day view', () =
   );
   const selected = container.querySelector('td.rdp-selected');
   expect(selected?.getAttribute('data-day')).toBe(toDayKey(nextMonth.getTime()));
+});
+
+it('opens the Daten & Backup view from the header button and returns', async () => {
+  const { container } = render(<App />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Daten & Backup' }));
+
+  expect(await screen.findByRole('heading', { level: 2, name: 'Daten & Backup' })).toBeTruthy();
+  expect(container.querySelector('td[data-day]')).toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: '‹ Zurück' }));
+  expect(await screen.findByRole('heading', { name: '🍼 Baby-Tagebuch' })).toBeTruthy();
+  expect(container.querySelector('td[data-day]')).toBeTruthy();
+});
+
+it('shows the daily export banner with an entry and hides it for today after dismissing', async () => {
+  localStorage.clear();
+  await db.entries.clear();
+  await db.entries.add({
+    createdAt: Date.now(),
+    type: 'note',
+    text: 'Banner-Test',
+    attachments: [],
+  });
+
+  render(<App />);
+  const banner = await screen.findByText('Backup fällig – Einträge sichern');
+  expect(banner.closest('.backup-banner')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Export' })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Später' }));
+  expect(screen.queryByText('Backup fällig – Einträge sichern')).toBeNull();
+
+  await db.entries.clear();
+  localStorage.clear();
 });
