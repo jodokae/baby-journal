@@ -36,7 +36,7 @@ Safari → open the Pages URL → Share → **"Zum Home-Bildschirm"**. It then r
 - Tests live next to the code as `*.test.ts(x)`. Use `src/test-setup.ts` for global test setup (it loads `fake-indexeddb`).
 - Prettier formatting; run `npm run format` before pushing.
 - No user data, no real journal content, no secrets in the repo — the repo is code only.
-- **Merge mode: auto** — feature branches are pushed to origin and merged into main (fast-forward when possible) as soon as review passes; no per-branch merge confirmation needed. A push to main triggers the GitHub Pages deploy (`deploy.yml`).
+- **Merge mode: auto (local merges only)** — feature branches are merged into main locally (fast-forward when possible) as soon as review passes; no per-branch merge confirmation needed. **Agents never push** — the user performs all pushes (a push to main triggers the GitHub Pages deploy (`deploy.yml`)).
 
 ## Data model rules (critical)
 
