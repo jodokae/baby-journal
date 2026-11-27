@@ -4,6 +4,7 @@ import { db } from '../db';
 import { dayRangeMs } from '../lib/dates';
 import './day-view.css';
 import Composer from './Composer';
+import MicButton from './MicButton';
 
 const dayFormatter = new Intl.DateTimeFormat('de-DE', {
   weekday: 'long',
@@ -136,7 +137,7 @@ export default function DayView({ day, onBack }: DayViewProps) {
           </>
         )
       ) : (
-        <Composer day={day} />
+        <Composer day={day} micSlot={(helpers) => <MicButton {...helpers} />} />
       )}
     </div>
   );
