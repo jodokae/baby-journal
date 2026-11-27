@@ -6,7 +6,9 @@
  * Lifecycle discipline:
  * - Requests are processed strictly sequentially (single-threaded WASM anyway).
  * - After an idle timeout the pipeline is disposed to free its WASM memory;
- *   the next request transparently rebuilds it from the Cache API in seconds.
+ *   the next `load` request transparently rebuilds it from the Cache API in
+ *   seconds (only `load` rebuilds — a chunk/final without a loaded pipeline
+ *   reports an error).
  * - `abort` disposes immediately (the hook usually terminates the whole worker,
  *   this is the in-worker safety net).
  */
@@ -142,6 +144,11 @@ function scheduleIdleDispose() {
 
 async function ensurePipeline(id: number) {
   if (asr) {
+    // A reused, still-loaded pipeline must not be disposed by a stale idle
+    // timer scheduled by the previous transcription: cancel the pending
+    // 60 s dispose here, or the pipeline could vanish mid-session between
+    // this `ready` and the next chunk (transcribe would then fail).
+    cancelIdleDispose();
     post({ type: 'ready', id });
     return;
   }

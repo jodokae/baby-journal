@@ -63,7 +63,7 @@ export function createWorkerTranscriber(): VoiceTranscriber {
           }
           break;
         case 'idle-disposed':
-          break; // informational only — the next request rebuilds the pipeline
+          break; // informational only — only a `load` request rebuilds the pipeline
       }
     };
     worker.onerror = (event) => {
