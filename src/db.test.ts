@@ -47,6 +47,11 @@ it('opening v2 after v1 clears all entries (one-time wipe)', async () => {
   await Dexie.delete(name);
 });
 
+// Accepted tradeoff: this test re-declares the version chain instead of using
+// BabyJournalDB, because the database name must be parameterized for isolation
+// and touching the critical db.ts constructor for a test hook was deliberately
+// avoided. The duplication fails loudly if the chain semantics change, but it
+// would not track a pure rename — acceptable for a schema-critical file.
 it('opening the app at v3 after v2 keeps entries intact and adds an empty entryHistory', async () => {
   const name = 'baby-journal-v3-upgrade-test';
   await Dexie.delete(name);
