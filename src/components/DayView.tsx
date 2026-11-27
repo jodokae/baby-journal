@@ -20,6 +20,9 @@ const dayFormatter = new Intl.DateTimeFormat('de-DE', {
 /** Debounce window after the last change before the text is persisted. */
 const AUTOSAVE_DELAY_MS = 1000;
 
+/** Same cap as the textarea's maxLength — enforced in code for programmatic text. */
+const MAX_TEXT_LENGTH = 2000;
+
 interface DayViewProps {
   /** The day this screen shows. */
   day: Date;
@@ -118,7 +121,9 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
   }
 
   async function persistText(value: string) {
-    const trimmed = value.trim();
+    // Last line of defense for the length cap: typed input is capped by the
+    // DOM, programmatic text (dictation) is clamped here as well.
+    const trimmed = value.trim().slice(0, MAX_TEXT_LENGTH);
     const { start, end } = dayRangeMs(day);
     // Fresh read instead of the possibly stale liveQuery value: a previous
     // save in the chain may have created the entry in the meantime.
@@ -163,9 +168,12 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
     scheduleSave(value);
   }
 
-  /** Dictation helper: appends transcript text to the current content. */
+  /**
+   * Dictation helper: appends transcript text to the current content —
+   * clamped so dictation obeys the same maxLength cap as typed input.
+   */
   function appendText(appended: string) {
-    updateText(textRef.current + appended);
+    updateText((textRef.current + appended).slice(0, MAX_TEXT_LENGTH));
   }
 
   // Flush on unmount (back button): nothing typed is lost even when the
@@ -195,21 +203,25 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
 
   /**
    * Restores a text snapshot: replaces the editor content with the snapshot
-   * text — after snapshotting the current text, so restoring is itself
+   * text — after snapshotting the entry's stored text, so restoring is itself
    * undoable. Serialized through the write chain like every other write.
    */
   function restoreTextRow(row: EntryHistoryRow) {
     if (entry?.id === undefined) return;
     const restored = row.text ?? '';
-    const current = textRef.current.trim();
     setHistoryOpen(false);
-    if (restored === current) return; // nothing to change
+    if (restored === textRef.current.trim()) return; // editor stays as it is
     cancelPendingSave();
     textRef.current = restored;
     setTextState(restored);
     const id = entry.id;
     void enqueueWrite(async () => {
-      if (current) await snapshotText(id, current);
+      // Snapshot the STORED text, not the editor text: the two can diverge
+      // (e.g. the editor was cleared to whitespace, which never rewrites the
+      // entry). Skipping the snapshot here would destroy the stored text
+      // without any history row to undo the restore with.
+      const stored = (await db.entries.get(id))?.text ?? '';
+      if (stored && stored !== restored) await snapshotText(id, stored);
       await db.entries.update(id, { text: restored });
     });
   }
@@ -221,7 +233,7 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
         onChange={(e) => updateText(e.target.value)}
         placeholder="Eintrag für diesen Tag …"
         aria-label="Eintrag für diesen Tag"
-        maxLength={2000}
+        maxLength={MAX_TEXT_LENGTH}
         rows={3}
         autoFocus
       />

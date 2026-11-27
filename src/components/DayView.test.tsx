@@ -288,6 +288,28 @@ it('keeps the existing entry when setText via the mic slot clears the text', asy
   expect(all[0].text).toBe('Bleibt'); // empty text never deletes the entry
 });
 
+it('clamps dictation appends to the 2000-character cap and still auto-saves', async () => {
+  await renderEditor(
+    <DayView
+      day={now}
+      onBack={vi.fn()}
+      micSlot={({ appendText }) => (
+        <button type="button" onClick={() => appendText('x'.repeat(2100))}>
+          Diktieren
+        </button>
+      )}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: 'Diktieren' }));
+  expect(field().value).toHaveLength(2000); // clamped like typed input
+
+  await saveAfterDebounce();
+  const all = await db.entries.toArray();
+  expect(all).toHaveLength(1);
+  expect(all[0].text).toHaveLength(2000);
+});
+
 it('shows the Verlauf button only when the entry has history', async () => {
   // Real timers: the nested history liveQuery delivers only on real loop
   // turns (under faked timers dexie's initial setTimeout(doQuery) is lost).
@@ -331,6 +353,36 @@ it('restores a text snapshot and snapshots the current text first', async () => 
   // Restoring is itself undoable: the pre-restore text was snapshotted first.
   const history = await db.entryHistory.where('entryId').equals(id).toArray();
   expect(history.some((row) => row.kind === 'text' && row.text === 'Neuer Stand')).toBe(true);
+});
+
+it('restores over a diverged editor and snapshots the stored entry text', async () => {
+  vi.useRealTimers(); // see the Verlauf-button test above
+  const id = await seedEntry('B');
+  // One history row so the Verlauf button appears and "A" is restorable.
+  await db.entryHistory.add({ entryId: id, at: Date.now() - 5000, kind: 'text', text: 'A' });
+  render(<DayView day={now} onBack={vi.fn()} />);
+  await settleUntil(
+    () =>
+      (screen.queryByLabelText('Eintrag für diesen Tag') as HTMLTextAreaElement | null)?.value ===
+      'B',
+  );
+
+  // Clear the editor to whitespace: the auto-save is a no-op, so the DB keeps
+  // "B" while the editor shows "" — the two now diverge.
+  fireEvent.change(field(), { target: { value: '   ' } });
+
+  await settleUntil(() => screen.queryByRole('button', { name: 'Verlauf' }) !== null);
+  fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
+  await settleUntil(
+    () => screen.queryByRole('button', { name: /Version vom .* wiederherstellen/ }) !== null,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /Version vom .* wiederherstellen/ }));
+
+  // The stored "B" was snapshotted before the restore overwrote it.
+  await settleUntil(async () => (await db.entries.get(id))?.text === 'A');
+  const history = await db.entryHistory.where('entryId').equals(id).toArray();
+  expect(history.some((row) => row.kind === 'text' && row.text === 'B')).toBe(true);
+  expect(field().value).toBe('A');
 });
 
 it('lists stashed attachments as informational rows without a restore button', async () => {
