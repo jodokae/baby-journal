@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { comparable } from '../voice/dedup';
+import { voiceDebug } from '../voice/debug';
 import { useVoice } from '../voice/useVoice';
 
 /**
@@ -104,6 +105,9 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
    * meantime — their words are never dropped.
    */
   function swapAppendedFor(finalText: string) {
+    // Logged at entry so every onFinal delivery is visible — including the
+    // fallback paths below, where no literal swap takes place.
+    voiceDebug('mirror: swap final=%o', finalText);
     const current = text;
     const appended = appendedLiveRef.current;
     appendedLiveRef.current = '';
@@ -138,6 +142,7 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
     lastLiveRef.current = live;
     if (!delta) return;
     appendedLiveRef.current += appendWithSpace(delta);
+    voiceDebug('mirror: +delta=%o', delta);
     // text/appendText are read from the freshest render; chunks arrive seconds
     // apart, so the closure is never stale in practice.
   }, [voice.liveText, voice.phase]);

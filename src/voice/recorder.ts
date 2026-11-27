@@ -18,6 +18,8 @@
  * recorder.test.ts, and the pure resampler is tested directly.
  */
 
+import { voiceDebug } from './debug';
+
 export const SAMPLE_RATE = 16000;
 /** Length of one live-transcription chunk in seconds. */
 export const CHUNK_SECONDS = 4;
@@ -80,6 +82,8 @@ export function createRecorder(): VoiceRecorder {
   let chunksEmitted = 0;
   let autoStopFired = false;
   let active = false;
+  // Diagnostics (voiceDebug): logs only the FIRST worklet message per session.
+  let workletMessageSeen = false;
   // Set by teardown() — an instance captures exactly ONE session and is never
   // restarted. Guards the async gap between the permission prompt and the
   // audio graph: a dispose() that lands while getUserMedia is still pending
@@ -148,6 +152,10 @@ export function createRecorder(): VoiceRecorder {
 
   function onWorkletMessage(event: MessageEvent<Float32Array>) {
     if (!context) return;
+    if (!workletMessageSeen) {
+      workletMessageSeen = true;
+      voiceDebug('capture: first worklet msg len=%d', event.data.length);
+    }
     // The context runs at the device rate (start() passes no sampleRate
     // hint), so EVERY message takes the resampler — a context that happens
     // to run at 16 kHz is passed through inside resampleLinear. The worklet
@@ -161,6 +169,7 @@ export function createRecorder(): VoiceRecorder {
       if (active) return;
       chunkHandler = onChunk;
       autoStopHandler = onAutoStop;
+      workletMessageSeen = false;
 
       // First await must be the permission prompt itself: called synchronously
       // from the tap handler, the request happens inside the user gesture.
@@ -219,6 +228,9 @@ export function createRecorder(): VoiceRecorder {
       source.connect(node);
       node.connect(mute);
       mute.connect(context.destination);
+      // Logged BEFORE the post-build resume attempt: a context that WebKit
+      // re-suspended across the graph build shows up here as state != running.
+      voiceDebug('capture: ctx.state=%s rate=%d', context.state, context.sampleRate);
       // Verify the context actually runs before declaring capture active: a
       // context stuck in 'suspended' must fail the start loudly (the German
       // MIC_ERROR in useVoice) instead of dictating into silence.
@@ -235,6 +247,7 @@ export function createRecorder(): VoiceRecorder {
         throw new Error(`AudioContext ${state}`);
       }
       active = true;
+      voiceDebug('capture: started, state=%s', context.state);
     },
 
     stop() {

@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mergeChunkTranscripts } from './dedup';
+import { voiceDebug } from './debug';
 import { createRecorder, SAMPLE_RATE, type VoiceRecorder } from './recorder';
 import { createWorkerTranscriber, type VoiceTranscriber } from './transcriber';
 
@@ -108,7 +109,13 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
         const pcm = queueRef.current.shift();
         if (!pcm) break;
         try {
+          // Cheap peak over every 100th sample: distinguishes real audio from
+          // digital silence (all-zero worklet output) in one line.
+          let peak = 0;
+          for (let i = 0; i < pcm.length; i += 100) peak = Math.max(peak, Math.abs(pcm[i]));
+          voiceDebug('chunk: len=%d peak=%.3f', pcm.length, peak);
           const text = await transcriber().transcribeChunk(pcm);
+          voiceDebug('chunk -> %o', text);
           if (sessionRef.current !== session) continue;
           if (!text.trim()) {
             // A single empty result on near-silence is normal — a parent
@@ -119,6 +126,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
             // windows overlap by 1 s, so this counts audio coverage slightly
             // conservatively.
             emptyAudioSecondsRef.current += pcm.length / SAMPLE_RATE;
+            voiceDebug('chunk: empty result (streak %s s)', emptyAudioSecondsRef.current);
             if (emptyAudioSecondsRef.current >= EMPTY_AUDIO_SECONDS_LIMIT) {
               // Thirty seconds of emptiness mean the microphone delivers
               // audio the model cannot use (e.g. a suspended or mis-clocked
@@ -180,6 +188,9 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   }
 
   function setPhaseRef(next: VoicePhase) {
+    // Central transition log — the cheapest line that discriminates every
+    // "button shows X but nothing happens" report.
+    voiceDebug('phase: %s -> %s', phaseRef.current, next);
     phaseRef.current = next;
     setPhase(next);
   }
