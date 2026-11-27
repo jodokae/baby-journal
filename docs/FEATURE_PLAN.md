@@ -288,6 +288,35 @@ Gesamt ≈ 9–12 Fokustage (eher ~10–11).
   ist für Web-Apps auf iOS unmöglich (PhotoKit nur für native Apps) und wird nicht angestrebt. Die
   zuvor erwogenen Metadaten `name`/`takenAt` (manuelle Rückverfolgung) werden verworfen — manuelle
   Suche half dem Nutzer nicht weiter.
+- **2026-11-27 — Kalender-first statt Tabs (übersteuert Feature 1 „Zweiter Tab“ und die
+  Journal-Liste).** Die Tab-Navigation entfällt; der Kalender ist die einzige Übersicht. Tipp auf
+  einen Tag öffnet die **Vollbild-Tagesansicht** mit iOS-artigem Zurück-Button. **Ein Eintrag pro
+  Tag** (übersteuert Feature 2 „Mehrere Einträge pro Tag“): Composer nur an Tagen ohne Eintrag
+  (heute/zurückliegend; Zukunftstage ohne Eingabe). Bearbeiten erlaubt (nur `text`, `createdAt`
+  unverändert); **Löschen mit Bestätigungsschritt** (übersteuert die Undo-Snackbar aus Feature 2).
+  Composer-Textfeld ist eine mehrzeilige Textarea (maxLength 2000).
+- **2026-11-27 — Einmaliger Daten-Wipe per Schema-Upgrade (Nutzerentscheid „Leer neu anfangen“).**
+  `db.version(2)` mit identischen Stores und `upgrade()`-Clear wird ergänzt (version(1) bleibt
+  unangetastet). Übersteuert die Aussage „`src/db.ts` wird von keinem Job geändert“ bzw. „Schema
+  bleibt Version 1“ im Ist-Zustand: version(1) bleibt unverändert, aber die App erhält version(2)
+  als Einmal-Wipe.
+- **2026-11-27 — Backup & Daten-Sicherheit (neues Feature).** Hintergrund: iOS-PWAs haben keinen
+  File-System-Zugriff (File System Access API fehlt komplett; OPFS unterliegt derselben
+  Eviction-Klasse wie IndexedDB). Paket: tägliches „Export“-Banner beim ersten App-Start des Tages
+  — ein Tap stößt den Export direkt an (Web Share → „In Dateien sichern“, Fallback Download), ohne
+  weitere Bestätigung; dazu manueller Export (JSON inkl. Anhänge als Base64),
+  Import/Wiederherstellung mit Überschreib-Bestätigung, `navigator.storage.persist()` beim
+  App-Start und eine „Daten & Backup“-Ansicht (Speicherverbrauch, Persistenz-Status, letztes
+  Backup). Modell-Hosting-Entscheid für Whisper: **HF-CDN zur Laufzeit** (Repo bleibt schlank) —
+  entspricht dem Plan.
+- **2026-11-27 — Voice: Feature 4 unverändert bestätigt (Nutzerentscheid).** Direkt Whisper bauen,
+  kein Staging über iOS-Tastatur-Diktat; Web Speech API bleibt ausgeschlossen (On-Device-
+  Verarbeitung nicht verifizierbar).
+- **2026-11-27 — Foto-Scope-Klarstellung.** Feature 3 gilt wie beschrieben (komprimierte
+  JPEG-Kopie ~2048 px + ~256-px-Thumb, Share Target, gemeinsame `ingestImages(files)`); **Videos
+  sind nicht im Scope** (später ergänzbar). Eine parallel erstellte Foto-Implementierungsanalyse
+  (512-px-Thumbs, Video-Caps) tritt neben den Plan, soweit sie ihm nicht widerspricht — Details
+  legt der spätere Foto-Job fest.
 
 ### Warum kein Galerie-Link — und was stattdessen gilt (entschieden)
 
