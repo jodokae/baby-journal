@@ -367,17 +367,21 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
    */
   function restoreAttachmentRow(row: EntryHistoryRow) {
     if (entry?.id === undefined) return;
-    const stashed = row.attachment;
     const rowId = row.id;
-    if (!stashed || rowId === undefined) return;
+    if (rowId === undefined) return;
     const id = entry.id;
     void enqueueWrite(async () => {
+      // Re-read the vault row: a second tap before the liveQuery refreshes
+      // the panel must not re-append the attachment (idempotence) — when the
+      // row is gone the restore already happened.
+      const stashed = (await db.entryHistory.get(rowId))?.attachment;
+      if (!stashed) return;
       // Fresh read: the entry may have vanished meanwhile — then the stash
       // is kept (nothing is restored, nothing deleted).
       const existing = await db.entries.get(id);
       if (!existing || existing.id === undefined) return;
       // Reconstruct the real attachment: blob + mime/width/height from the
-      // vault row, fresh createdAt (thumbnail was never stashed).
+      // vault row, fresh createdAt.
       await db.entries.update(id, {
         attachments: [...(existing.attachments ?? []), { ...stashed, createdAt: Date.now() }],
       });

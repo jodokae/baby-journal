@@ -660,6 +660,34 @@ it('offers stashed attachments for restore in the Verlauf panel', async () => {
   expect(screen.getByRole('button', { name: /Anhang vom .* wiederherstellen/ })).toBeTruthy();
 });
 
+it('restores an attachment only once when the button is tapped twice', async () => {
+  vi.useRealTimers(); // see the Verlauf-button test above
+  const id = await seedEntry('Mit Anhang');
+  await stashRemovedAttachment(id, {
+    kind: 'photo',
+    blob: new Blob(['fake-image'], { type: 'image/png' }),
+    mime: 'image/png',
+  });
+  render(<DayView day={now} onBack={vi.fn()} />);
+  await settleUntil(() => screen.queryByLabelText('Eintrag für diesen Tag') !== null);
+  await settleUntil(() => screen.queryByRole('button', { name: 'Verlauf' }) !== null);
+  fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
+  await settleUntil(
+    () => screen.queryByRole('button', { name: /Anhang vom .* wiederherstellen/ }) !== null,
+  );
+
+  // Two taps before the liveQuery has removed the row: the second write
+  // must see the vault row gone (or not yet gone) WITHOUT duplicating the
+  // attachment — the re-read of the row inside the write makes it idempotent.
+  fireEvent.click(screen.getByRole('button', { name: /Anhang vom .* wiederherstellen/ }));
+  fireEvent.click(screen.getByRole('button', { name: /Anhang vom .* wiederherstellen/ }));
+
+  await settleUntil(async () => ((await db.entries.get(id))?.attachments ?? []).length === 1);
+  expect((await db.entries.get(id))?.attachments).toHaveLength(1); // no duplicate tile
+  const rows = await db.entryHistory.where('entryId').equals(id).toArray();
+  expect(rows.filter((row) => row.kind === 'attachment')).toHaveLength(0);
+});
+
 it('removes an attachment only after confirmation and stashes it in the vault', async () => {
   const id = await seedEntry('Mit Fotos', [photoAttachment(), photoAttachment('image/png')]);
   await renderEditor();
