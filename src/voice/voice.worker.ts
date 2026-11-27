@@ -140,18 +140,14 @@ function scheduleIdleDispose() {
   }, IDLE_DISPOSE_MS);
 }
 
-async function ensurePipeline(id: number) {
-  if (asr) {
-    post({ type: 'ready', id });
-    return;
-  }
+async function buildPipeline(id: number, announceReady: boolean): Promise<AsrPipeline | null> {
   resetProgressTracking();
   try {
     asr = await createPipeline(onModelProgress);
   } catch (err) {
     if (!wasmEnv || !defaultWasmPaths) {
       post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) });
-      return;
+      return null;
     }
     // One retry against the transformers default (jsDelivr CDN): covers
     // browsers that cannot instantiate the locally bundled asyncify variant.
@@ -165,22 +161,42 @@ async function ensurePipeline(id: number) {
         id,
         message: retryErr instanceof Error ? retryErr.message : String(retryErr),
       });
-      return;
+      return null;
     }
   }
   resetProgressTracking();
-  post({ type: 'ready', id });
+  // 'ready' only for a genuine load request: a rebuild for a late final pass
+  // must not resolve the pending transcription with an empty result.
+  if (announceReady) post({ type: 'ready', id });
+  return asr;
+}
+
+async function ensurePipeline(id: number) {
+  if (asr) {
+    post({ type: 'ready', id });
+    return;
+  }
+  await buildPipeline(id, true);
 }
 
 async function transcribe(id: number, pcm: Float32Array, isFinal: boolean) {
   try {
-    if (!asr) throw new Error('pipeline not loaded');
+    let model = asr;
+    if (!model) {
+      // A late final pass can arrive after the idle dispose (>60 s without a
+      // request): rebuild the pipeline instead of failing the transcription
+      // with „Finale Transkription fehlgeschlagen“. Live chunks cannot
+      // outlive their session's load, so they still fail loudly.
+      if (!isFinal) throw new Error('pipeline not loaded');
+      model = await buildPipeline(id, false);
+      if (!model) return; // error already posted
+    }
     // ~4 s live chunks are transcribed as one window; the final pass gets the
     // whole recording and lets the pipeline window it (30 s chunks, 5 s stride).
     const options = isFinal
       ? { language: 'german', task: 'transcribe', chunk_length_s: 30, stride_length_s: 5 }
       : { language: 'german', task: 'transcribe' };
-    const output = await asr(pcm, options);
+    const output = await model(pcm, options);
     post({ type: 'result', id, text: output.text.trim() });
     // After every completed transcription — live chunk or final pass — the
     // pipeline becomes idle-disposable: the whisper-base WASM model must not
