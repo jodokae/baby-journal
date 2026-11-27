@@ -4,6 +4,7 @@ import { clearAllEntries, db, ENTRY_STORES } from './db';
 
 beforeEach(async () => {
   await db.entries.clear();
+  await db.entryHistory.clear();
 });
 
 it('speichert und liest Einträge mit Anhängen', async () => {
@@ -43,5 +44,36 @@ it('opening v2 after v1 clears all entries (one-time wipe)', async () => {
   await v2.open();
   expect(await v2.table('entries').count()).toBe(0);
   v2.close();
+  await Dexie.delete(name);
+});
+
+it('opening the app at v3 after v2 keeps entries intact and adds an empty entryHistory', async () => {
+  const name = 'baby-journal-v3-upgrade-test';
+  await Dexie.delete(name);
+
+  // Seed one entry under v2, exactly as a pre-v3 device would have it.
+  const v2 = new Dexie(name);
+  v2.version(1).stores({ entries: ENTRY_STORES });
+  v2.version(2).stores({ entries: ENTRY_STORES }).upgrade(clearAllEntries);
+  await v2.open();
+  await v2.table('entries').add({
+    createdAt: Date.now(),
+    type: 'note',
+    text: 'v2-Eintrag',
+    attachments: [],
+  });
+  v2.close();
+
+  // Reopen with the app's version chain: no migration needed, entries survive.
+  const v3 = new Dexie(name);
+  v3.version(1).stores({ entries: ENTRY_STORES });
+  v3.version(2).stores({ entries: ENTRY_STORES }).upgrade(clearAllEntries);
+  v3.version(3).stores({ entries: ENTRY_STORES, entryHistory: '++id, entryId, at' });
+  await v3.open();
+  expect(await v3.table('entries').count()).toBe(1);
+  const entry = await v3.table('entries').get(1);
+  expect(entry?.text).toBe('v2-Eintrag');
+  expect(await v3.table('entryHistory').count()).toBe(0);
+  v3.close();
   await Dexie.delete(name);
 });
