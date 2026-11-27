@@ -1,37 +1,54 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { db } from '../db';
+import { dayKeyToNoon, toDayKey } from '../lib/dates';
 
 interface ComposerProps {
-  /** Optional element rendered at the start of the composer row (e.g. an event-type picker). */
-  leftSlot?: ReactNode;
-  /** Optional element rendered between input and submit button (e.g. a microphone button). */
-  micSlot?: ReactNode;
+  /** The day the entry belongs to. Today gets Date.now(), any other day (past or future) local noon. */
+  day: Date;
 }
 
-/** Input row for a new journal entry. Self-contained; slots extend it without changing the default UI. */
-export default function Composer({ leftSlot, micSlot }: ComposerProps) {
+/**
+ * Multi-line input for a new journal entry on the given day. The day screen
+ * only renders it when the day has no entry yet, which keeps the model at
+ * one entry per day. iOS grows the textarea as the text wraps — no JS
+ * auto-resize needed.
+ */
+export default function Composer({ day }: ComposerProps) {
   const [text, setText] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  // Ref guard so a rapid second submit is rejected synchronously, before
+  // any re-render could disable the button.
+  const submittingRef = useRef(false);
 
   async function addEntry(event: FormEvent) {
     event.preventDefault();
     const trimmed = text.trim();
-    if (!trimmed) return;
-    await db.entries.add({ createdAt: Date.now(), type: 'note', text: trimmed, attachments: [] });
-    setText('');
+    if (!trimmed || submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      const dayKey = toDayKey(day.getTime());
+      const createdAt = dayKey === toDayKey(Date.now()) ? Date.now() : dayKeyToNoon(dayKey);
+      await db.entries.add({ createdAt, type: 'note', text: trimmed, attachments: [] });
+      setText('');
+    } finally {
+      // Guard must reset even when the add fails, or the composer locks up.
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
   }
 
   return (
     <form className="composer" onSubmit={addEntry}>
-      {leftSlot}
-      <input
+      <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Notiz für heute …"
-        aria-label="Neue Notiz"
-        maxLength={500}
+        placeholder="Eintrag für diesen Tag …"
+        aria-label="Neuer Eintrag"
+        maxLength={2000}
+        rows={3}
       />
-      {micSlot}
-      <button type="submit" disabled={!text.trim()}>
+      <button type="submit" disabled={!text.trim() || submitting}>
         Hinzufügen
       </button>
     </form>

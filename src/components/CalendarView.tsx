@@ -1,26 +1,31 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { DayPicker } from 'react-day-picker';
 import { de } from 'react-day-picker/locale';
 import 'react-day-picker/style.css';
 import { db } from '../db';
 import { daysWithEntries, groupEntriesByDay } from '../lib/calendar-query';
-import { monthRangeMs, toDayKey } from '../lib/dates';
+import { monthRangeMs } from '../lib/dates';
 
 const monthFormatter = new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' });
-const dayFormatter = new Intl.DateTimeFormat('de-DE', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-});
-const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
 
-/** Calendar tab: month grid with entry dots and a read-only list of the selected day. */
-export default function CalendarView() {
-  const [month, setMonth] = useState(() => new Date());
-  const [selected, setSelected] = useState<Date | undefined>(() => new Date());
+interface CalendarViewProps {
+  /** Displayed month; controlled so it survives a round-trip to the day view. */
+  month: Date;
+  onMonthChange: (month: Date) => void;
+  /** The highlighted day (the one last tapped), or null. */
+  selectedDay: Date | null;
+  /** Called when the user taps a day; App opens the full-screen day view. */
+  onDaySelect: (day: Date) => void;
+}
 
+/** Calendar screen: month grid with entry dots. Tapping a day opens the day view. */
+export default function CalendarView({
+  month,
+  onMonthChange,
+  selectedDay,
+  onDaySelect,
+}: CalendarViewProps) {
   const { start, end } = monthRangeMs(month.getFullYear(), month.getMonth());
   const monthEntries = useLiveQuery(
     () => db.entries.where('createdAt').between(start, end, true, false).toArray(),
@@ -30,17 +35,12 @@ export default function CalendarView() {
   const entriesByDay = useMemo(() => groupEntriesByDay(monthEntries ?? []), [monthEntries]);
   const entryDays = useMemo(() => daysWithEntries(entriesByDay), [entriesByDay]);
 
-  const selectedKey = selected ? toDayKey(selected.getTime()) : undefined;
-  const selectedEntries = selectedKey ? (entriesByDay.get(selectedKey) ?? []) : [];
-
   function shiftMonth(delta: number) {
-    setMonth(new Date(month.getFullYear(), month.getMonth() + delta, 1));
+    onMonthChange(new Date(month.getFullYear(), month.getMonth() + delta, 1));
   }
 
   function goToToday() {
-    const now = new Date();
-    setMonth(now);
-    setSelected(now);
+    onMonthChange(new Date());
   }
 
   return (
@@ -62,33 +62,17 @@ export default function CalendarView() {
         mode="single"
         locale={de}
         month={month}
-        onMonthChange={setMonth}
-        selected={selected}
-        onSelect={setSelected}
+        onMonthChange={onMonthChange}
+        selected={selectedDay ?? undefined}
+        onSelect={(day) => {
+          if (day) onDaySelect(day);
+        }}
         fixedWeeks
         showOutsideDays={false}
         hideNavigation
         modifiers={{ hasEntries: entryDays }}
         modifiersClassNames={{ hasEntries: 'has-entries' }}
       />
-
-      {selected && (
-        <section aria-label="Einträge am ausgewählten Tag" className="day-entries">
-          <h3>{dayFormatter.format(selected)}</h3>
-          {selectedEntries.length === 0 ? (
-            <p className="empty">Keine Einträge an diesem Tag.</p>
-          ) : (
-            <ul className="entries">
-              {selectedEntries.map((entry) => (
-                <li key={entry.id} className="entry">
-                  <time>{timeFormatter.format(entry.createdAt)}</time>
-                  <span>{entry.text}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
     </section>
   );
 }
