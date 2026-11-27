@@ -4,6 +4,7 @@ import CalendarView from './components/CalendarView';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import DayView from './components/DayView';
 import MicButton from './components/MicButton';
+import './components/app-header.css';
 import { dayKeyToNoon, toDayKey } from './lib/dates';
 import { pruneHistory } from './lib/history';
 import { useDailyBackupBanner } from './lib/useDailyBackupBanner';
@@ -66,7 +67,7 @@ export default function App() {
               <h1>🍼 Baby-Tagebuch</h1>
               <button
                 type="button"
-                className="icon-button"
+                className="icon-action header-action"
                 aria-label="Daten & Backup"
                 onClick={() => setBackupOpen(true)}
               >

@@ -1,0 +1,30 @@
+/* Header of the calendar screen: title left, backup action flush right.
+   The button mirrors the .icon-action family (src/components/day-editor.css)
+   so it looks identical while staying styled even when the day view's
+   stylesheet is not loaded — keep the two blocks in sync. */
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.header-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.header-action:hover {
+  border-color: var(--muted);
+}
