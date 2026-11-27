@@ -11,6 +11,9 @@ class FakeRecorder implements VoiceRecorder {
   onChunk: ((pcm: Float32Array) => void) | null = null;
   onAutoStop: (() => void) | null = null;
   startError: Error | null = null;
+  /** When true, start() hangs until rejectDeferredStart() — late rejections. */
+  deferredStart = false;
+  private rejectStartFn: ((err: Error) => void) | null = null;
 
   /**
    * Stateful on purpose: emitted chunks accumulate into the recording buffer
@@ -22,10 +25,20 @@ class FakeRecorder implements VoiceRecorder {
   private captured: Float32Array[] = [];
 
   async start(onChunk: (pcm: Float32Array) => void, onAutoStop: () => void) {
+    if (this.deferredStart) {
+      await new Promise<void>((_, reject) => {
+        this.rejectStartFn = reject;
+      });
+    }
     if (this.startError) throw this.startError;
     this.started = true;
     this.onChunk = onChunk;
     this.onAutoStop = onAutoStop;
+  }
+
+  /** Releases a hanging start() with a rejection (deferredStart must be set). */
+  rejectDeferredStart(err: Error) {
+    this.rejectStartFn?.(err);
   }
 
   emit(chunk: Float32Array) {
@@ -178,6 +191,57 @@ describe('useVoice', () => {
     expect(result.current.phase).toBe('listening');
   });
 
+  it('fails unusable audio only after 30 s of continuous empty windows', async () => {
+    // The round-2 report: mic active, status line stuck on listening,
+    // nothing written, no console output. Whatever upstream break produces
+    // them, empty results must never stay invisible forever — but a natural
+    // thinking pause (a couple of empty near-silence chunks) is normal for
+    // hands-full dictation and must not kill it. Chunks are 64_000 samples
+    // = 4 s of audio each; the old count-based streak of 3 aborted after
+    // ~9 s of silence.
+    const { result, recorder, transcriber } = setup();
+    await startToListening(result, transcriber);
+
+    const chunkSpy = vi.spyOn(transcriber, 'transcribeChunk');
+    transcriber.chunkResults = Array(8).fill('');
+    for (let i = 0; i < 7; i++) act(() => recorder.emit(new Float32Array(64_000)));
+    await waitFor(() => expect(chunkSpy).toHaveBeenCalledTimes(7));
+    expect(result.current.phase).toBe('listening'); // 28 s: still below the limit
+
+    act(() => recorder.emit(new Float32Array(64_000))); // 32 s cumulative
+    await waitFor(() => expect(result.current.phase).toBe('error'));
+    expect(result.current.error).toMatch('keine verwertbaren Audiodaten');
+    // The recorder is released so the mic indicator goes dark and a retry
+    // builds a fresh instance.
+    expect(recorder.disposed).toBe(true);
+  });
+
+  it('survives a thinking pause: two empty chunks then speech keep listening', async () => {
+    const { result, recorder, transcriber } = setup();
+    await startToListening(result, transcriber);
+
+    transcriber.chunkResults = ['', '', 'endlich worte'];
+    act(() => recorder.emit(new Float32Array(64_000)));
+    act(() => recorder.emit(new Float32Array(64_000)));
+    act(() => recorder.emit(new Float32Array(64_000)));
+    await waitFor(() => expect(result.current.liveText).toBe('endlich worte'));
+    expect(result.current.phase).toBe('listening');
+  });
+
+  it('resets the accumulated emptiness on a non-empty result', async () => {
+    const { result, recorder, transcriber } = setup();
+    await startToListening(result, transcriber);
+
+    const chunkSpy = vi.spyOn(transcriber, 'transcribeChunk');
+    transcriber.chunkResults = ['', '', '', '', 'text', '', '', ''];
+    for (let i = 0; i < 8; i++) act(() => recorder.emit(new Float32Array(64_000)));
+    await waitFor(() => expect(chunkSpy).toHaveBeenCalledTimes(8));
+    // 16 s before the reset + 12 s after: each run stays under the limit,
+    // while the un-reset total (28 s + …) would have been judged failure.
+    expect(result.current.phase).toBe('listening');
+    expect(result.current.liveText).toBe('text');
+  });
+
   it('shows a German error and supports retry when loading fails', async () => {
     const { result, transcriber } = setup();
     transcriber.loadError = new Error('offline');
@@ -198,6 +262,67 @@ describe('useVoice', () => {
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe('error'));
     expect(result.current.error).toMatch('Mikrofon konnte nicht gestartet werden');
+  });
+
+  it('disposes the recorder when start() throws and retries with a fresh one', async () => {
+    // A start() throw can land AFTER the permission grant (worklet or context
+    // failure): the leaked instance would keep the microphone live and a
+    // retry would silently no-op on the still-active old recorder.
+    const recorders = [new FakeRecorder(), new FakeRecorder()];
+    const transcriber = new FakeTranscriber();
+    let next = 0;
+    const hook = renderHook(() =>
+      useVoice({
+        createRecorderInstance: () => recorders[next++],
+        createTranscriberInstance: () => transcriber,
+      }),
+    );
+    recorders[0].startError = new Error('worklet failed');
+    act(() => hook.result.current.start());
+    await waitFor(() => expect(hook.result.current.phase).toBe('error'));
+    expect(recorders[0].disposed).toBe(true);
+
+    // The failed instance is dropped: the retry must start a fresh one.
+    act(() => hook.result.current.start());
+    await waitFor(() => expect(recorders[1].started).toBe(true));
+  });
+
+  it('a stale failed start disposes only its own recorder (newer session keeps running)', async () => {
+    // Session A's start() rejects AFTER the user cancelled and restarted:
+    // the catch must dispose A, never re-fetch the ref (session B's recorder)
+    // — nulling it would kill the live session.
+    const recorders = [new FakeRecorder(), new FakeRecorder()];
+    const transcriber = new FakeTranscriber();
+    let next = 0;
+    const hook = renderHook(() =>
+      useVoice({
+        createRecorderInstance: () => recorders[next++],
+        createTranscriberInstance: () => transcriber,
+      }),
+    );
+
+    // Session A: start hangs (permission prompt pending).
+    recorders[0].deferredStart = true;
+    act(() => hook.result.current.start());
+    await waitFor(() => expect(hook.result.current.phase).toBe('loading'));
+
+    // The user backs out and re-taps: cancel disposes A, session B records.
+    act(() => hook.result.current.cancel());
+    transcriber.chunkResults = ['neue session'];
+    await startToListening(hook.result, transcriber);
+    expect(recorders[1].started).toBe(true);
+
+    // NOW A's start rejects (e.g. a worklet failure on the stale session).
+    recorders[0].rejectDeferredStart(new Error('late boom'));
+    await waitFor(() => expect(recorders[0].disposed).toBe(true));
+    // B survives untouched, in listening, without a spurious error.
+    expect(recorders[1].disposed).toBe(false);
+    expect(hook.result.current.phase).toBe('listening');
+    expect(hook.result.current.error).toBeNull();
+
+    // B still records end to end.
+    act(() => recorders[1].emit(new Float32Array(64_000)));
+    await waitFor(() => expect(hook.result.current.liveText).toBe('neue session'));
   });
 
   it('abort mid-load disposes recorder and transcriber', async () => {

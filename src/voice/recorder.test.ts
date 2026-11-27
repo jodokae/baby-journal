@@ -1,5 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_RECORDING_SECONDS, SAMPLE_RATE, createRecorder, resampleLinear } from './recorder';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  CHUNK_SECONDS,
+  MAX_RECORDING_SECONDS,
+  SAMPLE_RATE,
+  createRecorder,
+  resampleLinear,
+} from './recorder';
 
 describe('resampleLinear', () => {
   it('passes through when the rates match', () => {
@@ -33,6 +39,184 @@ describe('resampleLinear', () => {
 
   it('documents the recording cap at ten minutes', () => {
     expect(MAX_RECORDING_SECONDS).toBe(600);
+  });
+});
+
+type MessageListener = (event: MessageEvent<Float32Array>) => void;
+
+/**
+ * AudioContext stand-in for the capture-start seam (jsdom has no Web Audio).
+ * The `next` knobs configure the context constructed NEXT — set them before
+ * recorder.start(); they are reset in beforeEach.
+ */
+class FakeAudioContext {
+  static instances: FakeAudioContext[] = [];
+  /** Constructor arguments, recorded to pin the absence of a rate hint. */
+  static constructorArgs: unknown[][] = [];
+  static next: {
+    sampleRate: number;
+    initialState: 'running' | 'suspended';
+    resumeResult: 'running' | 'suspended';
+    resumeThrows: boolean;
+  } = {
+    sampleRate: 48_000,
+    initialState: 'suspended',
+    resumeResult: 'running',
+    resumeThrows: false,
+  };
+
+  sampleRate = FakeAudioContext.next.sampleRate;
+  state: 'running' | 'suspended' | 'closed' = FakeAudioContext.next.initialState;
+  resume = vi.fn(async () => {
+    if (FakeAudioContext.next.resumeThrows) throw new Error('resume rejected');
+    this.state = FakeAudioContext.next.resumeResult;
+  });
+  close = vi.fn(async () => {
+    this.state = 'closed';
+  });
+  destination = {};
+  audioWorklet = { addModule: vi.fn(async () => {}) };
+  createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }));
+  createGain = vi.fn(() => ({ gain: { value: 0 }, connect: vi.fn(), disconnect: vi.fn() }));
+
+  constructor(...args: unknown[]) {
+    FakeAudioContext.instances.push(this);
+    FakeAudioContext.constructorArgs.push(args);
+  }
+}
+
+class FakeWorkletNode {
+  static instances: FakeWorkletNode[] = [];
+  listeners = new Map<string, MessageListener>();
+  connect = vi.fn();
+  disconnect = vi.fn();
+  port = {
+    addEventListener: (type: string, listener: MessageListener) => {
+      this.listeners.set(type, listener);
+    },
+    removeEventListener: (type: string) => {
+      this.listeners.delete(type);
+    },
+  };
+
+  constructor() {
+    FakeWorkletNode.instances.push(this);
+  }
+
+  /** Delivers one worklet message (the real node posts ~100 ms batches). */
+  dispatch(data: Float32Array) {
+    this.listeners.get('message')?.(new MessageEvent('message', { data }));
+  }
+}
+
+function installCaptureFakes(trackStop = vi.fn()) {
+  const getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop: trackStop }] }));
+  Object.defineProperty(navigator, 'mediaDevices', {
+    value: { getUserMedia },
+    configurable: true,
+  });
+  vi.stubGlobal('AudioContext', FakeAudioContext);
+  vi.stubGlobal('AudioWorkletNode', FakeWorkletNode);
+  return { trackStop };
+}
+
+describe('createRecorder (jsdom seam: capture start over faked Web Audio)', () => {
+  beforeEach(() => {
+    FakeAudioContext.instances = [];
+    FakeAudioContext.constructorArgs = [];
+    FakeWorkletNode.instances = [];
+    FakeAudioContext.next = {
+      sampleRate: 48_000,
+      initialState: 'suspended',
+      resumeResult: 'running',
+      resumeThrows: false,
+    };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(navigator, 'mediaDevices');
+  });
+
+  it('resumes a suspended context and starts capturing once it runs', async () => {
+    installCaptureFakes();
+    const recorder = createRecorder();
+    await expect(recorder.start(vi.fn(), vi.fn())).resolves.toBeUndefined();
+    const context = FakeAudioContext.instances[0];
+    expect(context.resume).toHaveBeenCalled();
+    expect(context.state).toBe('running');
+  });
+
+  it('does not resume a context that already runs', async () => {
+    FakeAudioContext.next.initialState = 'running';
+    installCaptureFakes();
+    const recorder = createRecorder();
+    await expect(recorder.start(vi.fn(), vi.fn())).resolves.toBeUndefined();
+    expect(FakeAudioContext.instances[0].resume).not.toHaveBeenCalled();
+  });
+
+  it('fails the start loudly when the context stays suspended', async () => {
+    FakeAudioContext.next.resumeResult = 'suspended';
+    const { trackStop } = installCaptureFakes();
+    const recorder = createRecorder();
+    await expect(recorder.start(vi.fn(), vi.fn())).rejects.toThrow('AudioContext suspended');
+    // The failed start releases the microphone and tears the graph down.
+    expect(trackStop).toHaveBeenCalled();
+    expect(FakeAudioContext.instances[0].close).toHaveBeenCalled();
+    expect(FakeWorkletNode.instances[0].disconnect).toHaveBeenCalled();
+  });
+
+  it('fails the start loudly when resume() rejects', async () => {
+    FakeAudioContext.next.resumeThrows = true;
+    installCaptureFakes();
+    const recorder = createRecorder();
+    await expect(recorder.start(vi.fn(), vi.fn())).rejects.toThrow('AudioContext suspended');
+    expect(FakeAudioContext.instances[0].close).toHaveBeenCalled();
+  });
+
+  it('creates the context at the device rate (no sampleRate hint)', async () => {
+    installCaptureFakes();
+    const recorder = createRecorder();
+    await recorder.start(vi.fn(), vi.fn());
+    // A requested rate makes WebKit deliver mic samples at the hardware rate
+    // into the rate-hinted context (time-warped audio): the constructor must
+    // never see a sampleRate option.
+    expect(FakeAudioContext.constructorArgs).toEqual([[]]);
+  });
+
+  it('resamples every worklet message to 16 kHz (device-rate context)', async () => {
+    installCaptureFakes();
+    const onChunk = vi.fn();
+    const recorder = createRecorder();
+    await recorder.start(onChunk, vi.fn());
+    // One 4 s chunk at 48 kHz = 192_000 samples; the batching of the real
+    // worklet is irrelevant to the resampler, so deliver it in one message.
+    const input = new Float32Array(48_000 * CHUNK_SECONDS);
+    for (let i = 0; i < input.length; i++) input[i] = i / input.length;
+    FakeWorkletNode.instances[0].dispatch(input);
+    // Exactly one chunk of 64_000 samples at 16 kHz on the same ramp — an
+    // unscaled pass-through would emit three chunks at a third of the values.
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    const chunk = onChunk.mock.calls[0][0] as Float32Array;
+    expect(chunk.length).toBe(SAMPLE_RATE * CHUNK_SECONDS);
+    for (let i = 0; i < chunk.length; i++) {
+      expect(chunk[i]).toBeCloseTo(i / chunk.length, 5);
+    }
+  });
+
+  it('still captures when the context happens to run at 16 kHz', async () => {
+    FakeAudioContext.next.sampleRate = SAMPLE_RATE;
+    installCaptureFakes();
+    const onChunk = vi.fn();
+    const recorder = createRecorder();
+    await recorder.start(onChunk, vi.fn());
+    const input = new Float32Array(SAMPLE_RATE * CHUNK_SECONDS);
+    for (let i = 0; i < input.length; i++) input[i] = i / input.length;
+    FakeWorkletNode.instances[0].dispatch(input);
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    const chunk = onChunk.mock.calls[0][0] as Float32Array;
+    expect(chunk.length).toBe(SAMPLE_RATE * CHUNK_SECONDS);
+    expect(chunk[100]).toBeCloseTo(100 / chunk.length, 5);
   });
 });
 

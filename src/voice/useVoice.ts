@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mergeChunkTranscripts } from './dedup';
-import { createRecorder, type VoiceRecorder } from './recorder';
+import { createRecorder, SAMPLE_RATE, type VoiceRecorder } from './recorder';
 import { createWorkerTranscriber, type VoiceTranscriber } from './transcriber';
 
 export type VoicePhase = 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
@@ -49,6 +49,10 @@ const LOAD_ERROR =
   'Sprachmodell konnte nicht geladen werden – bitte mit Internetverbindung erneut versuchen.';
 const FINAL_ERROR =
   'Finale Transkription fehlgeschlagen – der bereits erkannte Text bleibt erhalten.';
+const EMPTY_AUDIO_ERROR =
+  'Das Mikrofon liefert keine verwertbaren Audiodaten – bitte erneut versuchen.';
+/** Seconds of continuously empty audio windows before dictation fails. */
+const EMPTY_AUDIO_SECONDS_LIMIT = 30;
 
 export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const [phase, setPhase] = useState<VoicePhase>('idle');
@@ -68,6 +72,13 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const queueRef = useRef<Float32Array[]>([]);
   const drainingRef = useRef(false);
   const mergedLiveRef = useRef('');
+  /**
+   * Seconds of consecutive empty chunk windows — the "mic delivers nothing"
+   * detector. Time-based (not result-count-based): near-silence during a
+   * thinking pause is NORMAL for hands-full dictation, only ~30 s of
+   * continuous emptiness is a real fault.
+   */
+  const emptyAudioSecondsRef = useRef(0);
 
   // Generation counter guarding in-flight async work against a concurrent
   // start()/cancel(): every continuation bails out if its session is stale.
@@ -98,7 +109,32 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
         if (!pcm) break;
         try {
           const text = await transcriber().transcribeChunk(pcm);
-          if (sessionRef.current !== session || !text.trim()) continue;
+          if (sessionRef.current !== session) continue;
+          if (!text.trim()) {
+            // A single empty result on near-silence is normal — a parent
+            // dictating hands-full thinks between sentences and Whisper
+            // returns nothing there. Only ~30 s of CONTINUOUS empty windows
+            // prove the microphone delivers nothing usable. The duration
+            // comes from the pcm window itself (no wall clock involved);
+            // windows overlap by 1 s, so this counts audio coverage slightly
+            // conservatively.
+            emptyAudioSecondsRef.current += pcm.length / SAMPLE_RATE;
+            if (emptyAudioSecondsRef.current >= EMPTY_AUDIO_SECONDS_LIMIT) {
+              // Thirty seconds of emptiness mean the microphone delivers
+              // audio the model cannot use (e.g. a suspended or mis-clocked
+              // context): fail loudly instead of dictating into infinite
+              // silence. Disposing the recorder releases the mic and lets a
+              // retry build a fresh instance.
+              queueRef.current = [];
+              recorderRef.current?.dispose();
+              recorderRef.current = null;
+              setPhaseRef('error');
+              setError(EMPTY_AUDIO_ERROR);
+              return;
+            }
+            continue;
+          }
+          emptyAudioSecondsRef.current = 0;
           mergedLiveRef.current = mergeChunkTranscripts(mergedLiveRef.current, text);
           setLiveText(mergedLiveRef.current);
         } catch (err) {
@@ -164,6 +200,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     const session = sessionRef.current;
     queueRef.current = [];
     mergedLiveRef.current = '';
+    emptyAudioSecondsRef.current = 0;
     setLiveText('');
     setError(null);
     setProgress(0);
@@ -172,8 +209,12 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     void (async () => {
       // 1. Microphone first — recorder.start() calls getUserMedia as its very
       // first statement and must run inside the tap's user-gesture chain (iOS).
+      // The INSTANCE is captured here: the catch below must dispose its own
+      // session's recorder, never re-fetch the ref — by the time a slow start
+      // rejects, the ref may already belong to a newer session.
+      const rec = recorder();
       try {
-        await recorder().start(
+        await rec.start(
           (pcm) => {
             if (sessionRef.current !== session) return;
             queueRef.current.push(pcm);
@@ -187,6 +228,14 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
         );
       } catch (err) {
         console.warn('recorder failed', err);
+        // A start() throw can land AFTER the permission grant (worklet or
+        // context failure): dispose so the live microphone is released and
+        // a retry builds a fresh instance — mirroring the load-failure
+        // branch below. But a STALE rejection (cancel + restart happened
+        // meanwhile) must never kill the newer session's recorder: dispose
+        // only our instance and release the ref only if it still holds it.
+        rec.dispose();
+        if (recorderRef.current === rec) recorderRef.current = null;
         if (sessionRef.current !== session) return;
         setPhaseRef('error');
         setError(MIC_ERROR);
@@ -232,6 +281,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     recorder?.dispose();
     recorderRef.current = null;
     queueRef.current = [];
+    emptyAudioSecondsRef.current = 0;
     setPhaseRef('transcribing');
     void finalize(pcm);
   }, [finalize]);
@@ -242,6 +292,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     sessionRef.current++;
     queueRef.current = [];
     mergedLiveRef.current = '';
+    emptyAudioSecondsRef.current = 0;
     recorderRef.current?.dispose();
     recorderRef.current = null;
     void transcriberRef.current?.dispose();
