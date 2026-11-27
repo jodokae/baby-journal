@@ -212,12 +212,16 @@ async function transcribe(id: number, pcm: Float32Array, isFinal: boolean) {
       : { language: 'german', task: 'transcribe' };
     const output = await model(pcm, options);
     post({ type: 'result', id, text: output.text.trim() });
-    // After every completed transcription — live chunk or final pass — the
-    // pipeline becomes idle-disposable: the whisper-base WASM model must not
-    // stay resident (memory) while the user keeps editing the entry.
-    scheduleIdleDispose();
   } catch (err) {
     post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) });
+  } finally {
+    // EVERY exit path re-arms the idle dispose — success, a posted
+    // transcription error, and the build-failure return above. The old code
+    // armed only after a completed transcription: after the first failed job
+    // (whose timer was cancelled at job start) the whisper-base WASM model
+    // stayed resident indefinitely. scheduleIdleDispose() cancels any
+    // previous timer first, so re-arming cannot double-arm.
+    scheduleIdleDispose();
   }
 }
 
