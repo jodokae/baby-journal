@@ -688,6 +688,38 @@ it('restores an attachment only once when the button is tapped twice', async () 
   expect(rows.filter((row) => row.kind === 'attachment')).toHaveLength(0);
 });
 
+it('keeps the thumbnail across remove, stash and restore', async () => {
+  vi.useRealTimers(); // see the Verlauf-button test above
+  const id = await seedEntry('Mit Foto', [photoAttachment()]);
+  render(<DayView day={now} onBack={vi.fn()} />);
+  await settleUntil(() => screen.queryByLabelText('Eintrag für diesen Tag') !== null);
+
+  // Remove it: the stashed vault row keeps the thumbnail blob.
+  fireEvent.click(screen.getByRole('button', { name: 'Anhang entfernen' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Entfernen' }));
+  await settleUntil(async () => {
+    const rows = await db.entryHistory.where('entryId').equals(id).toArray();
+    return rows.some((row) => row.kind === 'attachment' && row.attachment?.thumb instanceof Blob);
+  });
+  expect((await db.entries.get(id))?.attachments).toHaveLength(0);
+
+  // Restore: the attachment comes back WITH its thumbnail — the tile renders
+  // the real image again, not the „Foto" placeholder.
+  await settleUntil(() => screen.queryByRole('button', { name: 'Verlauf' }) !== null);
+  fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
+  await settleUntil(
+    () => screen.queryByRole('button', { name: /Anhang vom .* wiederherstellen/ }) !== null,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /Anhang vom .* wiederherstellen/ }));
+  await settleUntil(async () => {
+    const attachments = (await db.entries.get(id))?.attachments ?? [];
+    return attachments.length === 1 && attachments[0].thumb instanceof Blob;
+  });
+  await settleUntil(
+    async () => (await (await db.entries.get(id))?.attachments[0]?.thumb?.text()) === 'thumb-bytes',
+  );
+});
+
 it('removes an attachment only after confirmation and stashes it in the vault', async () => {
   const id = await seedEntry('Mit Fotos', [photoAttachment(), photoAttachment('image/png')]);
   await renderEditor();

@@ -57,14 +57,15 @@ interface DayViewProps {
 }
 
 /**
- * Maps a stored attachment to its history-vault shape: the blob plus every
- * descriptive field (mime, pixel dimensions) — the thumbnail and createdAt
- * are storage details the vault does not need.
+ * Maps a stored attachment to its history-vault shape: blob, thumbnail and
+ * every descriptive field (mime, pixel dimensions) — only the storage-side
+ * createdAt is dropped (the vault timestamps the removal itself).
  */
 function toHistoryAttachment(attachment: Attachment): HistoryAttachment {
   return {
     kind: attachment.kind,
     blob: attachment.blob,
+    ...(attachment.thumb !== undefined && { thumb: attachment.thumb }),
     ...(attachment.mime !== undefined && { mime: attachment.mime }),
     ...(attachment.width !== undefined && { width: attachment.width }),
     ...(attachment.height !== undefined && { height: attachment.height }),
@@ -380,8 +381,8 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
       // is kept (nothing is restored, nothing deleted).
       const existing = await db.entries.get(id);
       if (!existing || existing.id === undefined) return;
-      // Reconstruct the real attachment: blob + mime/width/height from the
-      // vault row, fresh createdAt.
+      // Reconstruct the real attachment: blob, thumbnail and mime/width/
+      // height from the vault row, fresh createdAt.
       await db.entries.update(id, {
         attachments: [...(existing.attachments ?? []), { ...stashed, createdAt: Date.now() }],
       });
