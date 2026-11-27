@@ -8,6 +8,7 @@
 import { db } from '../db';
 import type { Attachment, Entry, EntryType } from '../db';
 import { toDayKey } from './dates';
+import type Dexie from 'dexie';
 
 /** Bump together with the entry shape in `BackupFile`. */
 export const BACKUP_SCHEMA_VERSION = 2;
@@ -282,18 +283,40 @@ export function entriesFromBackup(backup: BackupFile, codec: BackupCodec = defau
 }
 
 /**
+ * Optional table with 48h undo snapshots, added by a later schema version.
+ * Referenced only dynamically (never typed, never created here) so this
+ * module stays compatible with today's v1/v2 schema.
+ */
+export const ENTRY_HISTORY_TABLE = 'entryHistory';
+
+/**
+ * Replaces the whole `entries` table with `entries` in a single transaction.
+ * When the optional entry-history table exists in the current schema, it is
+ * cleared in the same transaction — otherwise old snapshot rows would become
+ * orphaned garbage after a restore. Looked up dynamically via `tables`, so
+ * schemas without it (v1/v2) simply skip the clear.
+ */
+export async function replaceEntries(target: Dexie, entries: Entry[]): Promise<void> {
+  const historyTable = target.tables.find((table) => table.name === ENTRY_HISTORY_TABLE);
+  const tables = historyTable ? [target.table('entries'), historyTable] : [target.table('entries')];
+  await target.transaction('rw', tables, async (tx) => {
+    await target.table('entries').clear();
+    await target.table('entries').bulkAdd(entries);
+    if (historyTable) await tx.table(ENTRY_HISTORY_TABLE).clear();
+  });
+}
+
+/**
  * Replaces all entries with the backup's entries (attachments as blobs) in a
- * single transaction, preserving the original ids. Returns the entry count.
+ * single transaction, preserving the original ids and clearing any existing
+ * entry history. Returns the entry count.
  */
 export async function restoreBackup(
   backup: BackupFile,
   codec: BackupCodec = defaultCodec,
 ): Promise<number> {
   const entries = entriesFromBackup(backup, codec);
-  await db.transaction('rw', db.entries, async () => {
-    await db.entries.clear();
-    await db.entries.bulkAdd(entries);
-  });
+  await replaceEntries(db, entries);
   return entries.length;
 }
 

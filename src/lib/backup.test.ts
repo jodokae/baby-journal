@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { db } from '../db';
+import Dexie from 'dexie';
+import { db, ENTRY_STORES } from '../db';
 import type { Entry } from '../db';
 import { toDayKey } from './dates';
 import {
@@ -16,8 +17,10 @@ import {
   LAST_EXPORT_KEY,
   markBackupExported,
   parseBackupFile,
+  replaceEntries,
   restoreBackup,
   serializeEntries,
+  ENTRY_HISTORY_TABLE,
   type BackupCodec,
 } from './backup';
 
@@ -285,6 +288,58 @@ describe('isShareCancelled', () => {
     expect(isShareCancelled(new DOMException('aborted', 'AbortError'))).toBe(true);
     expect(isShareCancelled(new Error('anything'))).toBe(false);
     expect(isShareCancelled(undefined)).toBe(false);
+  });
+});
+
+describe('entry-history cleanup on restore (forward-compatible)', () => {
+  const restoredEntries: Entry[] = [
+    { id: 9, createdAt: 2, type: 'note', text: 'neu', attachments: [] },
+  ];
+
+  /** Throwaway fake db with today's schema, optionally plus a history table. */
+  function makeTarget(name: string, withHistory: boolean): Dexie {
+    const target = new Dexie(name);
+    target
+      .version(1)
+      .stores(
+        withHistory
+          ? { entries: ENTRY_STORES, entryHistory: '++id, entryId' }
+          : { entries: ENTRY_STORES },
+      );
+    return target;
+  }
+
+  it('clears the history table in the same transaction when it exists', async () => {
+    const target = makeTarget('backup-restore-with-history', true);
+    await target.open();
+    await target.table('entryHistory').bulkAdd([{ entryId: 1 }, { entryId: 2 }]);
+    await target
+      .table('entries')
+      .bulkAdd([{ id: 1, createdAt: 1, type: 'note', text: 'alt', attachments: [] }]);
+
+    await replaceEntries(target, restoredEntries);
+
+    expect(await target.table('entries').toArray()).toEqual([
+      expect.objectContaining({ id: 9, text: 'neu' }),
+    ]);
+    expect(await target.table(ENTRY_HISTORY_TABLE).count()).toBe(0);
+    await target.delete();
+  });
+
+  it('is a no-op on the plain v1/v2 schema (nothing cleared, nothing thrown)', async () => {
+    const target = makeTarget('backup-restore-plain', false);
+    await target.open();
+    await target
+      .table('entries')
+      .bulkAdd([{ id: 1, createdAt: 1, type: 'note', text: 'alt', attachments: [] }]);
+
+    await expect(replaceEntries(target, restoredEntries)).resolves.toBeUndefined();
+
+    expect(target.tables.some((table) => table.name === 'entryHistory')).toBe(false);
+    expect(await target.table('entries').toArray()).toEqual([
+      expect.objectContaining({ id: 9, text: 'neu' }),
+    ]);
+    await target.delete();
   });
 });
 
