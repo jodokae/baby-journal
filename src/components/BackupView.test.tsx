@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../db';
 import { BACKUP_SCHEMA_VERSION } from '../lib/backup';
@@ -48,13 +48,13 @@ const backupJson = JSON.stringify({
 });
 
 describe('BackupView display', () => {
-  it('shows "noch kein Backup" and hides storage when unsupported', async () => {
+  it('shows "noch kein Backup" and no persistence row when unsupported', async () => {
     render(<BackupView onBack={() => {}} />);
     expect(await screen.findByText('noch kein Backup')).toBeTruthy();
-    expect(screen.queryByText('Speicher')).toBeNull();
+    expect(screen.queryByText('Persistenten Speicher anfordern')).toBeNull();
   });
 
-  it('shows usage and persistence, and can request persistence', async () => {
+  it('shows the persistence row with helper text and hides it silently once persisted', async () => {
     let persisted = false;
     mockStorageManager({
       estimate: vi.fn().mockResolvedValue({ usage: 5 * 1024 * 1024, quota: 100 * 1024 * 1024 }),
@@ -66,11 +66,29 @@ describe('BackupView display', () => {
     });
     render(<BackupView onBack={() => {}} />);
 
-    expect(await screen.findByText('Speicherverbrauch: 5,0 von 100,0 MB')).toBeTruthy();
-    expect(screen.queryByText('Speicher ist beständig ✓')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Beständigen Speicher anfordern' }));
-    expect(await screen.findByText('Speicher ist beständig ✓')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Beständigen Speicher anfordern' })).toBeNull();
+    expect(
+      await screen.findByText('Schützt deine Daten davor, dass iOS den App-Speicher räumt.'),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Persistenten Speicher anfordern' }));
+
+    // Granted: the whole row disappears — no residual checkmark line.
+    await waitFor(() => expect(screen.queryByText('Persistenten Speicher anfordern')).toBeNull());
+    expect(screen.queryByText(/beständig/i)).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Speicher' })).toBeNull();
+  });
+
+  it('hides usage and the persistence row when storage is already persisted', async () => {
+    const persisted = vi.fn(async () => true);
+    mockStorageManager({
+      estimate: vi.fn().mockResolvedValue({ usage: 5 * 1024 * 1024, quota: 100 * 1024 * 1024 }),
+      persist: vi.fn(),
+      persisted,
+    });
+    render(<BackupView onBack={() => {}} />);
+
+    await waitFor(() => expect(persisted).toHaveBeenCalled());
+    expect(screen.queryByText(/Speicherverbrauch/)).toBeNull();
+    expect(screen.queryByText('Persistenten Speicher anfordern')).toBeNull();
   });
 });
 

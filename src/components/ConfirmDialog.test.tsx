@@ -20,7 +20,24 @@ describe('ConfirmDialog', () => {
     expect(screen.getByRole('dialog', { name: 'Eintrag wirklich löschen?' })).toBeTruthy();
     expect(screen.getByText('Der Text wird gelöscht.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Löschen' })).toBeTruthy();
+    // Default tone: the destructive confirm stays red.
+    expect(screen.getByRole('button', { name: 'Löschen' }).className).toBe('danger');
     expect(screen.getByRole('button', { name: 'Abbrechen' })).toBeTruthy();
+  });
+
+  it('styles the confirm button as primary when tone="primary"', () => {
+    render(
+      <ConfirmDialog
+        title="Backup fällig"
+        confirmLabel="Export"
+        cancelLabel="Später"
+        tone="primary"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Export' }).className).toBe('primary');
+    expect(screen.getByRole('button', { name: 'Später' })).toBeTruthy();
   });
 
   it('confirms only via the confirm button', () => {

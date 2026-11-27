@@ -18,10 +18,11 @@ export interface DailyBackupBanner {
 }
 
 /**
- * State of the daily export banner on the calendar screen: "visible" follows
+ * State of the daily export dialog on the calendar screen: "visible" follows
  * the stored daily markers (`getBackupBannerState`) whenever the entry count
  * changes; a successful export or a dismiss („Später“) hides it immediately
- * and persists the decision for the rest of the day.
+ * and persists the decision for the rest of the day. A failed export keeps
+ * the dialog open with `error` set.
  */
 export function useDailyBackupBanner(): DailyBackupBanner {
   const entryCount = useLiveQuery(() => db.entries.count(), [], 0);

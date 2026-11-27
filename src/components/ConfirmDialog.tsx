@@ -1,6 +1,6 @@
 /**
- * Small modal confirmation dialog for destructive actions (entry delete,
- * attachment removal). Centered German card over a dark backdrop; closes via
+ * Small modal confirmation dialog (entry delete, attachment removal, daily
+ * backup export). Centered German card over a dark backdrop; closes via
  * Abbrechen, Escape or a backdrop tap — none of them confirms. Focus starts
  * on the cancel button (the safe choice) and body scroll is locked while
  * open, mirroring the Lightbox pattern.
@@ -13,10 +13,16 @@ export interface ConfirmDialogProps {
   title: string;
   /** Optional additional explanation line. */
   message?: string;
-  /** Label of the confirming (destructive) action, e.g. „Löschen". */
+  /** Label of the confirming action, e.g. „Löschen". */
   confirmLabel: string;
   /** Label of the aborting action. */
   cancelLabel?: string;
+  /**
+   * Visual tone of the confirming action: 'danger' (red text, the default for
+   * destructive confirms) or 'primary' (accent-filled, for non-destructive
+   * confirms like the daily backup export).
+   */
+  tone?: 'primary' | 'danger';
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -26,6 +32,7 @@ export function ConfirmDialog({
   message,
   confirmLabel,
   cancelLabel = 'Abbrechen',
+  tone = 'danger',
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -62,7 +69,11 @@ export function ConfirmDialog({
         <p className="confirm-title">{title}</p>
         {message ? <p className="confirm-message">{message}</p> : null}
         <div className="confirm-actions">
-          <button type="button" className="danger" onClick={onConfirm}>
+          <button
+            type="button"
+            className={tone === 'primary' ? 'primary' : 'danger'}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </button>
           <button type="button" ref={cancelButtonRef} onClick={onCancel}>
