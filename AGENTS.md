@@ -35,7 +35,7 @@ Safari → open the Pages URL → Share → **"Zum Home-Bildschirm"**. It then r
 - TypeScript `strict`; `verbatimModuleSyntax` is on — use `import type` for type-only imports.
 - Tests live next to the code as `*.test.ts(x)`. Use `src/test-setup.ts` for global test setup (it loads `fake-indexeddb`).
 - Prettier formatting; run `npm run format` before pushing.
-- Per-component CSS files — `src/main.css` stays tokens/base only. Screens (App, CalendarView, DayView, BackupView) use default exports; shared widgets (AttachmentStrip, Lightbox, ConfirmDialog) use named exports.
+- CSS policy (mid-migration): significant styles live next to their component — `calendar.css`, `day-editor.css`, `app-header.css`, `confirm-dialog.css`, `attachments.css` — while `src/main.css` keeps tokens/base plus the app-shell, mic and backup/export styles until they migrate. New components: put styles in a per-component file. Screens (App, CalendarView, DayView, BackupView) use default exports; shared widgets (AttachmentStrip, Lightbox, ConfirmDialog) use named exports.
 - No user data, no real journal content, no secrets in the repo — the repo is code only.
 - **Merge mode: auto (local merges only)** — feature branches are merged into main locally (fast-forward when possible) as soon as review passes; no per-branch merge confirmation needed. **Agents never push** — the user performs all pushes (a push to main triggers the GitHub Pages deploy (`deploy.yml`)).
 
@@ -51,12 +51,12 @@ Safari → open the Pages URL → Share → **"Zum Home-Bildschirm"**. It then r
 ## Architecture map
 
 - `src/App.tsx` — screen shell: calendar ↔ full-screen day editor ↔ „Daten & Backup“ view, plus the daily backup-due popup; `sessionStorage` restores the open day across reloads.
-- `src/components/` — App, CalendarView, DayView (mode-less auto-save editor, 48 h Verlauf panel built in), MicButton, AttachmentStrip, Lightbox, ConfirmDialog, BackupView.
+- `src/components/` — CalendarView, DayView (mode-less auto-save editor, 48 h Verlauf panel built in), MicButton, AttachmentStrip, Lightbox, ConfirmDialog, BackupView.
 - `src/lib/` — dates, calendar-query, history (text snapshots + stashed attachments), backup (export/import + daily-reminder state), media, thumbnails, ingest, object-url, storage; `useDailyBackupBanner.ts` backs the daily popup.
 - `src/voice/` — on-device Whisper dictation chain: useVoice, recorder, transcriber, voice.worker, dedup, pcm-worklet (plus protocol types).
 - `src/db.ts` — Dexie database + types (`Entry`, `Attachment`, `EntryHistoryRow`); schema versioning v1→v3 here (v2 = one-time wipe, v3 = `entryHistory`). Data model rules below apply.
 - `src/main.tsx` — React entry + service-worker registration (`virtual:pwa-register`).
-- `src/main.css` — tokens/base only: CSS variables, light/dark via `prefers-color-scheme`, safe-area padding for standalone mode; components carry their own CSS files.
+- `src/main.css` — global stylesheet mid-migration: tokens/base (CSS variables, light/dark via `prefers-color-scheme`, safe-area padding for standalone mode) plus the not-yet-migrated app-shell, mic and backup/export styles; some components carry their own CSS files (see Conventions).
 - `src/test-setup.ts` — global test setup (loads `fake-indexeddb`, guarded jsdom polyfill stubs).
 - `index.html` — PWA/iOS meta tags (`apple-touch-icon`, web-app-capable, theme colors).
 - `vite.config.ts` — Vite + `vite-plugin-pwa` (manifest, service worker) + Vitest config.
