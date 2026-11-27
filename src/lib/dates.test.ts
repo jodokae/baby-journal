@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { monthRangeMs, toDayKey } from './dates';
+import { dayKeyToNoon, dayRangeMs, monthRangeMs, toDayKey } from './dates';
 
 describe('toDayKey', () => {
   it('formats a timestamp as YYYY-MM-DD in local time', () => {
@@ -30,6 +30,47 @@ describe('toDayKey', () => {
   it('handles the year boundary', () => {
     expect(toDayKey(new Date(2026, 11, 31, 23, 59).getTime())).toBe('2026-12-31');
     expect(toDayKey(new Date(2027, 0, 1, 0, 0, 0, 0).getTime())).toBe('2027-01-01');
+  });
+});
+
+describe('dayKeyToNoon', () => {
+  it('returns local noon of the given day', () => {
+    expect(dayKeyToNoon('2026-11-27')).toBe(new Date(2026, 10, 27, 12).getTime());
+  });
+
+  it('stays on the same day key across DST spring-forward and fall-back', () => {
+    // 2026-03-29 and 2026-10-25 are the 2026 DST transitions in Europe/Berlin.
+    for (const key of ['2026-03-29', '2026-10-25']) {
+      expect(toDayKey(dayKeyToNoon(key))).toBe(key);
+    }
+  });
+});
+
+describe('dayRangeMs', () => {
+  it('starts at the first millisecond of the day', () => {
+    const { start } = dayRangeMs(new Date(2026, 10, 27));
+    expect(start).toBe(new Date(2026, 10, 27, 0, 0, 0, 0).getTime());
+  });
+
+  it('includes the last millisecond of the day and excludes the first of the next', () => {
+    const { start, end } = dayRangeMs(new Date(2026, 10, 27));
+    expect(new Date(2026, 10, 27, 23, 59, 59, 999).getTime()).toBeLessThan(end);
+    expect(new Date(2026, 10, 27, 23, 59, 59, 999).getTime()).toBeGreaterThanOrEqual(start);
+    expect(new Date(2026, 10, 28, 0, 0, 0, 0).getTime()).toBeGreaterThanOrEqual(end);
+  });
+
+  it('spans DST transition days fully', () => {
+    // Spring-forward (23h) and fall-back (25h) in Europe/Berlin; time zones
+    // without DST stay at 24h, so all three lengths are accepted.
+    for (const [month, day] of [
+      [2, 29],
+      [9, 25],
+    ] as const) {
+      const { start, end } = dayRangeMs(new Date(2026, month, day));
+      const hours = (end - start) / 3_600_000;
+      expect([23, 24, 25]).toContain(hours);
+      expect(toDayKey(end - 1)).toBe(toDayKey(start));
+    }
   });
 });
 

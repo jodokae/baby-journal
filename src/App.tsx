@@ -1,8 +1,6 @@
 import { useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Entry } from './db';
 import CalendarView from './components/CalendarView';
-import Composer from './components/Composer';
+import DayView from './components/DayView';
 
 const dateFormatter = new Intl.DateTimeFormat('de-DE', {
   weekday: 'long',
@@ -10,64 +8,36 @@ const dateFormatter = new Intl.DateTimeFormat('de-DE', {
   month: 'long',
   year: 'numeric',
 });
-const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
 
-type Tab = 'journal' | 'calendar';
-
+/**
+ * Two screens, a plain state swap: the calendar (default) and the full-screen
+ * view of one day. Month and selected day live here so they survive going back.
+ */
 export default function App() {
-  const [tab, setTab] = useState<Tab>('journal');
-  const entries = useLiveQuery(() => db.entries.orderBy('createdAt').reverse().toArray(), []);
+  const [month, setMonth] = useState(() => new Date());
+  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+  const [dayOpen, setDayOpen] = useState(false);
 
   return (
     <main className="app">
-      <header className="header">
-        <h1>🍼 Baby-Tagebuch</h1>
-        <p className="date">{dateFormatter.format(new Date())}</p>
-      </header>
-
-      <nav className="tabs" role="tablist" aria-label="Bereiche">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'journal'}
-          className="tab"
-          onClick={() => setTab('journal')}
-        >
-          Journal
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'calendar'}
-          className="tab"
-          onClick={() => setTab('calendar')}
-        >
-          Kalender
-        </button>
-      </nav>
-
-      {tab === 'journal' ? (
-        <>
-          <Composer />
-          <section aria-label="Einträge">
-            {entries === undefined ? (
-              <p className="empty">Lade …</p>
-            ) : entries.length === 0 ? (
-              <p className="empty">Noch keine Einträge – schreib die erste Notiz.</p>
-            ) : (
-              <ul className="entries">
-                {entries.map((entry: Entry) => (
-                  <li key={entry.id} className="entry">
-                    <time>{timeFormatter.format(entry.createdAt)}</time>
-                    <span>{entry.text}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </>
+      {dayOpen && selectedDay ? (
+        <DayView day={selectedDay} onBack={() => setDayOpen(false)} />
       ) : (
-        <CalendarView />
+        <>
+          <header className="header">
+            <h1>🍼 Baby-Tagebuch</h1>
+            <p className="date">{dateFormatter.format(new Date())}</p>
+          </header>
+          <CalendarView
+            month={month}
+            onMonthChange={setMonth}
+            selectedDay={selectedDay}
+            onDaySelect={(day) => {
+              setSelectedDay(day);
+              setDayOpen(true);
+            }}
+          />
+        </>
       )}
     </main>
   );
