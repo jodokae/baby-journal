@@ -3,8 +3,24 @@ import BackupView from './components/BackupView';
 import CalendarView from './components/CalendarView';
 import DayView from './components/DayView';
 import MicButton from './components/MicButton';
+import { dayKeyToNoon, toDayKey } from './lib/dates';
 import { pruneHistory } from './lib/history';
 import { useDailyBackupBanner } from './lib/useDailyBackupBanner';
+
+/**
+ * Session-scoped persistence of the open day: a page reload (dev-server dep
+ * reload, service-worker autoUpdate, plain F5) must not kick the user out of
+ * the day view they were in. Only the day selection is restored — the month
+ * and the backup view stay session state. Cleared by the day view's back
+ * button, so a reload of the calendar opens the calendar.
+ */
+const SELECTED_DAY_KEY = 'selectedDay';
+
+function restoreSelectedDay(): Date | null {
+  const key = sessionStorage.getItem(SELECTED_DAY_KEY);
+  if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return null;
+  return new Date(dayKeyToNoon(key));
+}
 
 /**
  * Two screens, a plain state swap: the calendar (default) and the full-screen
@@ -13,8 +29,9 @@ import { useDailyBackupBanner } from './lib/useDailyBackupBanner';
  */
 export default function App() {
   const [month, setMonth] = useState(() => new Date());
-  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
-  const [dayOpen, setDayOpen] = useState(false);
+  const [selectedDay, setSelectedDay] = useState<Date | null>(restoreSelectedDay);
+  // A stored day key implies the day view was open — restore both together.
+  const [dayOpen, setDayOpen] = useState(() => restoreSelectedDay() !== null);
   const [backupOpen, setBackupOpen] = useState(false);
   const banner = useDailyBackupBanner();
 
@@ -31,7 +48,10 @@ export default function App() {
       ) : dayOpen && selectedDay ? (
         <DayView
           day={selectedDay}
-          onBack={() => setDayOpen(false)}
+          onBack={() => {
+            setDayOpen(false);
+            sessionStorage.removeItem(SELECTED_DAY_KEY);
+          }}
           micSlot={(helpers) => <MicButton {...helpers} />}
         />
       ) : (
@@ -86,6 +106,7 @@ export default function App() {
             onDaySelect={(day) => {
               setSelectedDay(day);
               setDayOpen(true);
+              sessionStorage.setItem(SELECTED_DAY_KEY, toDayKey(day.getTime()));
             }}
           />
         </>

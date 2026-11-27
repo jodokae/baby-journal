@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { expect, it } from 'vitest';
+import { beforeEach, expect, it } from 'vitest';
 import App from './App';
 import { db } from './db';
 import { toDayKey } from './lib/dates';
@@ -10,6 +10,12 @@ const dayFormatter = new Intl.DateTimeFormat('de-DE', {
   day: 'numeric',
   month: 'long',
   year: 'numeric',
+});
+
+// The selected day is persisted in sessionStorage (survives a reload, dies
+// with the tab) — clear it between tests so no navigation leaks over.
+beforeEach(() => {
+  sessionStorage.clear();
 });
 
 function todayCell(container: HTMLElement): HTMLElement {
@@ -73,6 +79,37 @@ it('keeps the month and the selected day when returning from the day view', () =
   );
   const selected = container.querySelector('td.rdp-selected');
   expect(selected?.getAttribute('data-day')).toBe(toDayKey(nextMonth.getTime()));
+});
+
+it('reopens the day view after a reload when a day was open', async () => {
+  const first = render(<App />);
+  fireEvent.click(todayCell(first.container));
+  expect(await screen.findByRole('button', { name: '‹ Zurück' })).toBeTruthy();
+  first.unmount();
+
+  // "Reload": a fresh App instance, same session storage — the day view must
+  // come back instead of dumping the user on the calendar (dictation bug #1).
+  render(<App />);
+  expect(await screen.findByRole('button', { name: '‹ Zurück' })).toBeTruthy();
+  expect(screen.getByRole('heading', { level: 2 }).textContent).toBe(dayFormatter.format(now));
+});
+
+it('opens the calendar after a reload when the day view was closed', async () => {
+  const first = render(<App />);
+  fireEvent.click(todayCell(first.container));
+  fireEvent.click(await screen.findByRole('button', { name: '‹ Zurück' }));
+  first.unmount();
+
+  // The back button cleared the stored key: a reload shows the calendar.
+  const second = render(<App />);
+  expect(await screen.findByRole('heading', { name: '🍼 Baby-Tagebuch' })).toBeTruthy();
+  expect(second.container.querySelector('td[data-day]')).toBeTruthy();
+});
+
+it('ignores a corrupt stored day key and shows the calendar', () => {
+  sessionStorage.setItem('selectedDay', 'garbage');
+  const { container } = render(<App />);
+  expect(container.querySelector('td[data-day]')).toBeTruthy();
 });
 
 it('opens the Daten & Backup view from the header button and returns', async () => {
