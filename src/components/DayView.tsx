@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Entry } from '../db';
+import { db, type Entry, type EntryHistoryRow } from '../db';
 import { dayKeyToNoon, dayRangeMs, toDayKey } from '../lib/dates';
-import { snapshotBeforeOverwrite } from '../lib/history';
+import {
+  HISTORY_RETENTION_MS,
+  pruneHistory,
+  snapshotBeforeOverwrite,
+  snapshotText,
+} from '../lib/history';
 import './day-editor.css';
 
 const dayFormatter = new Intl.DateTimeFormat('de-DE', {
@@ -84,6 +89,18 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
   // is only changed by edits — never echoed back from the database.
   const [text, setTextState] = useState(() => entry?.text ?? '');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  // Rows of undo history for this entry within the retention window; 0 while
+  // the query has not delivered yet (and for days without an entry).
+  const historyCount = useLiveQuery(async () => {
+    if (entry?.id === undefined) return 0;
+    return db.entryHistory
+      .where('entryId')
+      .equals(entry.id)
+      .filter((row) => row.at >= Date.now() - HISTORY_RETENTION_MS)
+      .count();
+  }, [entry?.id]);
 
   // Latest text outside the render cycle: the debounced save, the unmount
   // flush and the dictation helpers read it synchronously.
@@ -176,6 +193,27 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
     void enqueueWrite(() => db.entries.delete(id));
   }
 
+  /**
+   * Restores a text snapshot: replaces the editor content with the snapshot
+   * text — after snapshotting the current text, so restoring is itself
+   * undoable. Serialized through the write chain like every other write.
+   */
+  function restoreTextRow(row: EntryHistoryRow) {
+    if (entry?.id === undefined) return;
+    const restored = row.text ?? '';
+    const current = textRef.current.trim();
+    setHistoryOpen(false);
+    if (restored === current) return; // nothing to change
+    cancelPendingSave();
+    textRef.current = restored;
+    setTextState(restored);
+    const id = entry.id;
+    void enqueueWrite(async () => {
+      if (current) await snapshotText(id, current);
+      await db.entries.update(id, { text: restored });
+    });
+  }
+
   return (
     <div className="day-editor">
       <textarea
@@ -208,6 +246,11 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
         </div>
       ) : (
         <div className="day-actions">
+          {historyCount ? (
+            <button type="button" onClick={() => setHistoryOpen(true)}>
+              Verlauf
+            </button>
+          ) : null}
           <button
             type="button"
             className="danger"
@@ -218,6 +261,126 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
           </button>
         </div>
       )}
+      {historyOpen && entry?.id !== undefined && (
+        <HistoryPanel
+          entryId={entry.id}
+          onClose={() => setHistoryOpen(false)}
+          onRestore={restoreTextRow}
+        />
+      )}
     </div>
+  );
+}
+
+const historyTimestampFormatter = new Intl.DateTimeFormat('de-DE', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+});
+
+function attachmentLabel(kind: string | undefined): string {
+  return kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : 'Foto';
+}
+
+/** First ~80 characters of a snapshot for the history list. */
+function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 80 ? `${flat.slice(0, 80)}…` : flat;
+}
+
+interface HistoryPanelProps {
+  entryId: number;
+  onClose: () => void;
+  onRestore: (row: EntryHistoryRow) => void;
+}
+
+/**
+ * Inline Verlauf panel: the entry's text snapshots (tap to restore) and
+ * stashed attachments (informational until the photos integration wires
+ * their restore).
+ */
+function HistoryPanel({ entryId, onClose, onRestore }: HistoryPanelProps) {
+  // Pure read: dexie forbids readwrite transactions inside a liveQuery
+  // querier, so stale rows are filtered here and physically pruned below.
+  const rows = useLiveQuery(async () => {
+    const cutoff = Date.now() - HISTORY_RETENTION_MS;
+    return db.entryHistory
+      .where('entryId')
+      .equals(entryId)
+      .filter((row) => row.at >= cutoff)
+      .reverse()
+      .toArray();
+  }, [entryId]);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // Prune on mount ("before listing"), outside the querier context.
+  useEffect(() => {
+    void pruneHistory();
+  }, []);
+
+  // Minimal focus handling: start keyboard focus on the close button.
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  return (
+    <section className="history-panel" aria-label="Verlauf">
+      <div className="history-head">
+        <h3>Verlauf</h3>
+        <button
+          type="button"
+          ref={closeButtonRef}
+          className="history-close"
+          onClick={onClose}
+          aria-label="Verlauf schließen"
+        >
+          Schließen
+        </button>
+      </div>
+      {rows === undefined ? (
+        <p className="history-empty">Lade …</p>
+      ) : rows.length === 0 ? (
+        <p className="history-empty">Keine gespeicherten früheren Versionen.</p>
+      ) : (
+        <ul className="history-list">
+          {rows.map((row) =>
+            row.kind === 'text' ? (
+              <li key={row.id}>
+                <button
+                  type="button"
+                  className="history-row"
+                  aria-label={`Version vom ${historyTimestampFormatter.format(row.at)} wiederherstellen`}
+                  onClick={() => onRestore(row)}
+                >
+                  <time dateTime={new Date(row.at).toISOString()}>
+                    {historyTimestampFormatter.format(row.at)}
+                  </time>
+                  <span className="history-preview">{preview(row.text ?? '')}</span>
+                </button>
+              </li>
+            ) : (
+              <li key={row.id}>
+                <div className="history-row history-attachment">
+                  <time dateTime={new Date(row.at).toISOString()}>
+                    {historyTimestampFormatter.format(row.at)}
+                  </time>
+                  <span className="history-preview">
+                    Anhang ({attachmentLabel(row.attachment?.kind)})
+                  </span>
+                  <span className="history-note">Wiederherstellen folgt</span>
+                </div>
+              </li>
+            ),
+          )}
+        </ul>
+      )}
+    </section>
   );
 }

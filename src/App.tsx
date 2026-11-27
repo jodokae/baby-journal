@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import CalendarView from './components/CalendarView';
 import DayView from './components/DayView';
+import { pruneHistory } from './lib/history';
 
 const dateFormatter = new Intl.DateTimeFormat('de-DE', {
   weekday: 'long',
@@ -17,6 +18,12 @@ export default function App() {
   const [month, setMonth] = useState(() => new Date());
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
   const [dayOpen, setDayOpen] = useState(false);
+
+  // Opportunistic housekeeping: drop undo-history rows older than 48 h once
+  // per app open (listing history prunes again before it shows rows).
+  useEffect(() => {
+    void pruneHistory();
+  }, []);
 
   return (
     <main className="app">

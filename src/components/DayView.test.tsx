@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
 import { db, type Entry } from '../db';
 import { toDayKey } from '../lib/dates';
+import { stashRemovedAttachment } from '../lib/history';
 import DayView from './DayView';
 
 const now = new Date();
@@ -38,9 +39,13 @@ afterEach(async () => {
 /** Lets faked timers fire and pending queries/writes settle (several loop turns). */
 async function drain() {
   await act(async () => {
-    for (let i = 0; i < 8; i++) {
-      await vi.advanceTimersByTimeAsync(0);
-      await Promise.resolve();
+    if (vi.isFakeTimers()) {
+      for (let i = 0; i < 8; i++) {
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+      }
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   });
 }
@@ -67,8 +72,19 @@ function field(): HTMLTextAreaElement {
   return screen.getByLabelText('Eintrag für diesen Tag') as HTMLTextAreaElement;
 }
 
-async function seedEntry(text: string): Promise<void> {
-  await db.entries.add({ createdAt: Date.now(), type: 'note', text, attachments: [] });
+/** Waits until `check` holds, letting dexie's liveQuery deliver on real loop turns. */
+async function settleUntil(check: () => boolean | Promise<boolean>, tries = 50) {
+  for (let i = 0; i < tries; i++) {
+    if (await check()) return;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+  }
+  expect(await check()).toBe(true);
+}
+
+async function seedEntry(text: string): Promise<number> {
+  return db.entries.add({ createdAt: Date.now(), type: 'note', text, attachments: [] });
 }
 
 it('auto-saves a new entry about a second after the last change', async () => {
@@ -270,4 +286,87 @@ it('keeps the existing entry when setText via the mic slot clears the text', asy
   const all = await db.entries.toArray();
   expect(all).toHaveLength(1);
   expect(all[0].text).toBe('Bleibt'); // empty text never deletes the entry
+});
+
+it('shows the Verlauf button only when the entry has history', async () => {
+  // Real timers: the nested history liveQuery delivers only on real loop
+  // turns (under faked timers dexie's initial setTimeout(doQuery) is lost).
+  vi.useRealTimers();
+  const id = await seedEntry('Mit Verlauf');
+  render(<DayView day={now} onBack={vi.fn()} />);
+  await settleUntil(() => screen.queryByLabelText('Eintrag für diesen Tag') !== null);
+  expect(screen.queryByRole('button', { name: 'Verlauf' })).toBeNull();
+
+  // History rows appear while the editor is open — the button shows up with them.
+  await db.entryHistory.add({ entryId: id, at: Date.now(), kind: 'text', text: 'Frühere Fassung' });
+  await settleUntil(() => screen.queryByRole('button', { name: 'Verlauf' }) !== null);
+});
+
+it('restores a text snapshot and snapshots the current text first', async () => {
+  vi.useRealTimers(); // see the Verlauf-button test above
+  const id = await seedEntry('Neuer Stand');
+  await db.entryHistory.add({
+    entryId: id,
+    at: Date.now() - 5000,
+    kind: 'text',
+    text: 'Alter Stand',
+  });
+  render(<DayView day={now} onBack={vi.fn()} />);
+  await settleUntil(
+    () =>
+      (screen.queryByLabelText('Eintrag für diesen Tag') as HTMLTextAreaElement | null)?.value ===
+      'Neuer Stand',
+  );
+
+  await settleUntil(() => screen.queryByRole('button', { name: 'Verlauf' }) !== null);
+  fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
+  await settleUntil(
+    () => screen.queryByRole('button', { name: /Version vom .* wiederherstellen/ }) !== null,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /Version vom .* wiederherstellen/ }));
+
+  await settleUntil(async () => (await db.entries.get(id))?.text === 'Alter Stand');
+  expect(screen.queryByLabelText('Verlauf')).toBeNull(); // panel closed after restore
+  expect(field().value).toBe('Alter Stand');
+  // Restoring is itself undoable: the pre-restore text was snapshotted first.
+  const history = await db.entryHistory.where('entryId').equals(id).toArray();
+  expect(history.some((row) => row.kind === 'text' && row.text === 'Neuer Stand')).toBe(true);
+});
+
+it('lists stashed attachments as informational rows without a restore button', async () => {
+  vi.useRealTimers(); // see the Verlauf-button test above
+  const id = await seedEntry('Mit Anhang');
+  render(<DayView day={now} onBack={vi.fn()} />);
+  await settleUntil(() => screen.queryByLabelText('Eintrag für diesen Tag') !== null);
+
+  await stashRemovedAttachment(id, {
+    kind: 'photo',
+    blob: new Blob(['fake-image'], { type: 'image/png' }),
+    mime: 'image/png',
+  });
+  await settleUntil(() => screen.queryByRole('button', { name: 'Verlauf' }) !== null);
+  fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
+  await settleUntil(() => screen.queryByText(/Anhang \(Foto\)/) !== null);
+
+  expect(screen.getByText('Wiederherstellen folgt')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Version vom .* wiederherstellen/ })).toBeNull();
+});
+
+it('closes the Verlauf panel with Escape and via Schließen', async () => {
+  vi.useRealTimers(); // see the Verlauf-button test above
+  const id = await seedEntry('Mit Verlauf');
+  await db.entryHistory.add({ entryId: id, at: Date.now(), kind: 'text', text: 'Frühere Fassung' });
+  render(<DayView day={now} onBack={vi.fn()} />);
+  await settleUntil(() => screen.queryByRole('button', { name: 'Verlauf' }) !== null);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
+  await settleUntil(() => screen.queryByLabelText('Verlauf') !== null);
+
+  fireEvent.keyDown(window, { key: 'Escape' });
+  expect(screen.queryByLabelText('Verlauf')).toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
+  await settleUntil(() => screen.queryByLabelText('Verlauf') !== null);
+  fireEvent.click(screen.getByRole('button', { name: 'Verlauf schließen' }));
+  expect(screen.queryByLabelText('Verlauf')).toBeNull();
 });

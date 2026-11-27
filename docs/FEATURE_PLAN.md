@@ -317,6 +317,11 @@ Gesamt ≈ 9–12 Fokustage (eher ~10–11).
   sind nicht im Scope** (später ergänzbar). Eine parallel erstellte Foto-Implementierungsanalyse
   (512-px-Thumbs, Video-Caps) tritt neben den Plan, soweit sie ihm nicht widerspricht — Details
   legt der spätere Foto-Job fest.
+- **2026-11-27 — Mode-less Auto-Save-Editor + 48h-Undo-Historie.** Kein View/Edit-Modus; Auto-Save
+  (~1 s Debounce, Flush beim Verlassen); leere Einträge bleiben bestehen; Löschen weiter nur mit
+  Bestätigung; `db.version(3)` mit neuer Tabelle `entryHistory` (Text-Snapshots vor Overwrites,
+  60 s-Drossel + Sofort bei radikaler Kürzung; entfernte Anhänge werden später beim Lösen dort
+  eingefangen); Verlauf-UI; Aufbewahrung 48 h, Cap 50/Eintrag.
 
 ### Warum kein Galerie-Link — und was stattdessen gilt (entschieden)
 
