@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { MAX_RECORDING_SECONDS, SAMPLE_RATE, resampleLinear } from './recorder';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MAX_RECORDING_SECONDS, SAMPLE_RATE, createRecorder, resampleLinear } from './recorder';
 
 describe('resampleLinear', () => {
   it('passes through when the rates match', () => {
@@ -33,5 +33,42 @@ describe('resampleLinear', () => {
 
   it('documents the recording cap at ten minutes', () => {
     expect(MAX_RECORDING_SECONDS).toBe(600);
+  });
+});
+
+describe('createRecorder (jsdom seam: only the dispose race is testable)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(navigator, 'mediaDevices');
+  });
+
+  it('stops the granted tracks and builds no audio graph when dispose() wins the permission race', async () => {
+    // Fake getUserMedia that resolves AFTER the owner cancelled (the real
+    // permission prompt stays pending for as long as the user takes).
+    let resolveStream: ((stream: MediaStream) => void) | undefined;
+    const trackStop = vi.fn();
+    const fakeStream = { getTracks: () => [{ stop: trackStop }] };
+    const getUserMedia = vi.fn(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          resolveStream = resolve;
+        }),
+    );
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia },
+      configurable: true,
+    });
+    // Must never be constructed on the disposed path — records any use.
+    const audioContext = vi.fn();
+    vi.stubGlobal('AudioContext', audioContext);
+
+    const recorder = createRecorder();
+    const startPromise = recorder.start(vi.fn(), vi.fn());
+    recorder.dispose(); // the user backed out while the prompt was pending
+    resolveStream?.(fakeStream as unknown as MediaStream);
+
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(trackStop).toHaveBeenCalled(); // microphone released immediately
+    expect(audioContext).not.toHaveBeenCalled(); // no AudioContext/worklet built
   });
 });

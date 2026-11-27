@@ -77,6 +77,11 @@ export function createRecorder(): VoiceRecorder {
   let chunksEmitted = 0;
   let autoStopFired = false;
   let active = false;
+  // Set by teardown() — an instance captures exactly ONE session and is never
+  // restarted. Guards the async gap between the permission prompt and the
+  // audio graph: a dispose() that lands while getUserMedia is still pending
+  // would otherwise leave a freshly granted, never-stopped microphone live.
+  let disposed = false;
 
   function append(samples: Float32Array) {
     if (count + samples.length > MAX_RECORDING_SECONDS * SAMPLE_RATE) {
@@ -123,6 +128,7 @@ export function createRecorder(): VoiceRecorder {
   }
 
   function teardown() {
+    disposed = true;
     node?.port.removeEventListener('message', onWorkletMessage);
     node?.disconnect();
     mute?.disconnect();
@@ -162,6 +168,15 @@ export function createRecorder(): VoiceRecorder {
           autoGainControl: true,
         },
       });
+
+      // A dispose() raced the permission grant (teardown saw `stream` still
+      // null and could not stop it): stop the freshly granted tracks at once
+      // and build no audio graph — otherwise the microphone stays live.
+      if (disposed) {
+        stream.getTracks().forEach((track) => track.stop());
+        stream = null;
+        return;
+      }
 
       try {
         context = new AudioContext({ sampleRate: SAMPLE_RATE });
