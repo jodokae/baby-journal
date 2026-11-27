@@ -10,6 +10,8 @@ import {
   type BackupFile,
 } from '../lib/backup';
 import { getStorageInfo, requestPersistentStorage, type StorageInfo } from '../lib/storage';
+import { ConfirmDialog } from './ConfirmDialog';
+import './view-nav.css';
 
 const dateTimeFormatter = new Intl.DateTimeFormat('de-DE', {
   dateStyle: 'medium',
@@ -36,8 +38,8 @@ function formatCount(count: number): string {
 /**
  * Full-screen "Daten & Backup" view: last export, a persistence request while
  * persistence is missing, plus manual export and import/restore. Import
- * replaces all entries only after an inline confirmation; nothing is touched
- * while the file is invalid.
+ * replaces all entries only after a ConfirmDialog; nothing is touched while
+ * the file is invalid.
  */
 export default function BackupView({ onBack }: BackupViewProps) {
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
@@ -174,20 +176,14 @@ export default function BackupView({ onBack }: BackupViewProps) {
       </div>
 
       {pendingImport && (
-        <div className="delete-confirm">
-          <p>
-            Bestehende Einträge werden gelöscht und durch das Backup ersetzt (
-            {formatCount(pendingImport.entries.length)}). Wirklich importieren?
-          </p>
-          <div className="day-actions">
-            <button type="button" className="danger" onClick={confirmImport} disabled={working}>
-              Ja, importieren
-            </button>
-            <button type="button" onClick={() => setPendingImport(null)} disabled={working}>
-              Abbrechen
-            </button>
-          </div>
-        </div>
+        <ConfirmDialog
+          tone="danger"
+          title="Wirklich importieren?"
+          message={`Bestehende Einträge werden gelöscht und durch das Backup ersetzt (${formatCount(pendingImport.entries.length)}).`}
+          confirmLabel="Ja, importieren"
+          onConfirm={confirmImport}
+          onCancel={() => setPendingImport(null)}
+        />
       )}
 
       {feedback && (

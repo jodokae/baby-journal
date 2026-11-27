@@ -21,6 +21,7 @@ import { AttachmentStrip } from './AttachmentStrip';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Lightbox } from './Lightbox';
 import './day-editor.css';
+import './view-nav.css';
 
 const dayFormatter = new Intl.DateTimeFormat('de-DE', {
   weekday: 'long',
