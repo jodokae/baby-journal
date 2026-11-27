@@ -162,18 +162,21 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
     }
   }
 
-  /** One code path for every text change: user typing and dictation alike. */
+  /**
+   * One code path for every text change: user typing and dictation alike.
+   * Clamped to the same cap as the textarea's DOM maxlength, which only
+   * covers typed input — programmatic text (appends and setText replacing a
+   * transcript) must not diverge from what persistText will store.
+   */
   function updateText(value: string) {
-    setTextState(value);
-    scheduleSave(value);
+    const clamped = value.slice(0, MAX_TEXT_LENGTH);
+    setTextState(clamped);
+    scheduleSave(clamped);
   }
 
-  /**
-   * Dictation helper: appends transcript text to the current content —
-   * clamped so dictation obeys the same maxLength cap as typed input.
-   */
+  /** Dictation helper: appends transcript text to the current content. */
   function appendText(appended: string) {
-    updateText((textRef.current + appended).slice(0, MAX_TEXT_LENGTH));
+    updateText(textRef.current + appended);
   }
 
   // Flush on unmount (back button): nothing typed is lost even when the
