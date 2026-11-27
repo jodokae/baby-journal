@@ -90,20 +90,6 @@ body {
   overflow-wrap: anywhere;
 }
 
-.mic-cleanup {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  align-self: flex-start;
-  color: var(--muted);
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-
-.mic-cleanup input {
-  accent-color: var(--accent);
-}
-
 .empty {
   color: var(--muted);
   text-align: center;

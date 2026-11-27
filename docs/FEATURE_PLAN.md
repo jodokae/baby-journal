@@ -322,6 +322,10 @@ Gesamt ≈ 9–12 Fokustage (eher ~10–11).
   Bestätigung; `db.version(3)` mit neuer Tabelle `entryHistory` (Text-Snapshots vor Overwrites,
   60 s-Drossel + Sofort bei radikaler Kürzung; entfernte Anhänge werden später beim Lösen dort
   eingefangen); Verlauf-UI; Aufbewahrung 48 h, Cap 50/Eintrag.
+- **2026-11-27 — Regel-Aufräumung entfernt (Nutzerentscheid).** Das Whisper-Diktat ist wortgetreu;
+  weder regelbasierte Füllwort-Entfernung (Stufe b) noch LLM-Rewrite laufen im Flow. `cleanup.ts`,
+  Toggle und der localStorage-Key wurden entfernt; „also"/„quasi"-Diskussion dadurch obsolet.
+  Manuelle Nachbearbeitung bleibt dem Nutzer im Editor.
 
 ### Warum kein Galerie-Link — und was stattdessen gilt (entschieden)
 

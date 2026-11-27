@@ -5,12 +5,10 @@
  * - the mic button with German labels/aria for every state,
  * - mirroring the live transcript into the entry text (append-only, so user
  *   edits during dictation are never overwritten),
- * - swapping that live text for the polished final transcription once it is
- *   ready — cleanup toggle („Füllwörter entfernen") applies ONLY to the final
- *   text, never to the live text.
+ * - swapping that live text for the final transcription once it is ready —
+ *   verbatim by design: dictation is never automatically rewritten.
  */
-import { useEffect, useRef, useState } from 'react';
-import { removeFillerWords } from '../voice/cleanup';
+import { useEffect, useRef } from 'react';
 import { useVoice } from '../voice/useVoice';
 
 /**
@@ -25,17 +23,11 @@ export interface MicSlotHelpers {
   text: string;
 }
 
-const CLEANUP_KEY = 'voiceFillerCleanup';
-
 function formatPercent(progress: number): string {
   return `${Math.min(100, Math.max(0, Math.round(progress * 100)))} %`;
 }
 
 export default function MicButton({ appendText, setText, text }: MicSlotHelpers) {
-  const [cleanupEnabled, setCleanupEnabled] = useState(
-    () => localStorage.getItem(CLEANUP_KEY) !== 'off',
-  );
-
   // Exact liveText prefix that has been mirrored into the entry so far. The
   // merged live text is single-space word joins, which is exactly how it lands
   // in the composer — so `lastIndexOf` can find and later replace it.
@@ -47,10 +39,9 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
   const hadTextRef = useRef(false);
 
   const voice = useVoice({
-    onFinal: (finalText) => {
-      const cleaned = cleanupEnabled ? removeFillerWords(finalText) : finalText;
-      swapAppendedFor(cleaned);
-    },
+    // Dictation is verbatim (user decision, see FEATURE_PLAN.md): the final
+    // transcription replaces the live text exactly as recognized.
+    onFinal: swapAppendedFor,
   });
 
   // (Re)starts dictation from idle/error with a clean mirror state — without
@@ -167,18 +158,6 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
       <p className="mic-status" aria-live="polite">
         {status}
       </p>
-      <label className="mic-cleanup">
-        <input
-          type="checkbox"
-          checked={cleanupEnabled}
-          onChange={(event) => {
-            const next = event.target.checked;
-            setCleanupEnabled(next);
-            localStorage.setItem(CLEANUP_KEY, next ? 'on' : 'off');
-          }}
-        />
-        Füllwörter entfernen
-      </label>
     </div>
   );
 }

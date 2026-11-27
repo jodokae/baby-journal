@@ -112,7 +112,7 @@ describe('MicButton', () => {
     expect(helpers.appendText).toHaveBeenCalledWith('heute');
   });
 
-  it('swaps the appended live text for the cleaned final text', () => {
+  it('swaps the appended live text for the final text verbatim', () => {
     const helpers = {
       appendText: vi.fn(),
       setText: vi.fn(),
@@ -131,8 +131,8 @@ describe('MicButton', () => {
     onFinal?.('erste worte ähm.');
 
     // The ähm in „Notiz ähm" is user text before the dictation — untouched.
-    // Only the final transcription itself is cleaned.
-    expect(helpers.setText).toHaveBeenCalledWith('Notiz ähm erste worte.');
+    // Only the final transcription itself lands verbatim — nothing is cleaned.
+    expect(helpers.setText).toHaveBeenCalledWith('Notiz ähm erste worte ähm.');
     expect(helpers.appendText).not.toHaveBeenCalledWith('erste worte ähm.');
   });
 
@@ -148,21 +148,6 @@ describe('MicButton', () => {
     onFinal?.('erste worte');
     expect(helpers.appendText).toHaveBeenCalledWith('erste worte');
     expect(helpers.setText).not.toHaveBeenCalled();
-  });
-
-  it('leaves the final text uncleaned when the toggle is off', () => {
-    const helpers = { appendText: vi.fn(), setText: vi.fn(), text: 'erste worte' };
-    useVoiceMock.mockReturnValue(voiceState());
-    const { rerender } = render(<MicButton {...helpers} />);
-    useVoiceMock.mockReturnValue(voiceState({ phase: 'listening', liveText: 'erste worte' }));
-    rerender(<MicButton {...helpers} />);
-
-    fireEvent.click(screen.getByLabelText('Füllwörter entfernen'));
-    expect(localStorage.getItem('voiceFillerCleanup')).toBe('off');
-
-    const onFinal = useVoiceMock.mock.calls.at(-1)![0]?.onFinal;
-    onFinal?.('erste worte ähm');
-    expect(helpers.setText).toHaveBeenCalledWith('erste worte ähm');
   });
 
   it('cancels dictation when the entry text was cleared (e.g. submitted)', () => {
