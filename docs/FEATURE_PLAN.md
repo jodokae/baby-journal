@@ -3,8 +3,8 @@
 > **Stand:** 2026-11-27 · **Status:** vereinbart (R3) · **Basis:** Code-Analyse des aktuellen
 > Stands (Datei-/Zeilen-Referenzen im Text)
 
-**R3 (2026-11-27):** LLM-Aufräumung aus initialem Scope entfernt (Nutzerentscheid — ~10–30 s pro
-Verbesserungsklick erschienen zu teuer). Nachrüstung als eigener Job jederzeit möglich.
+**R3 (2026-11-27):** LLM-Aufräumung aus initialem Scope entfernt (Nutzerentscheid — ~5–35 s pro
+Verbesserungsklick erschien zu teuer). Nachrüstung als eigener Job jederzeit möglich.
 
 Dieser Plan ist die dauerhafte, technische Referenz der vereinbarten Features — auch falls die
 planende Session verloren geht. Neue Entscheidungen ergänzen nur den Abschnitt
@@ -99,25 +99,15 @@ bestehenden `App.test.tsx`-Tests bleiben grün.
 - Fotos-Button im Composer → `<input type="file" accept="image/*" multiple>` — auf iOS DER native
   Pfad (öffnet den System-Fotos-Picker). Die File System Access API gibt es nicht in Safari
   (Chromium-only) — bewusst nicht genutzt; kein `capture`.
-- Speicher-Report: `navigator.storage.estimate()` mit Feature-Detect (Safari ab ~iOS 17, sonst
-  ausblenden) + einmalig `navigator.storage.persist()`.
-
-### Warum keine Kopie vermeidbar ist (dokumentiert)
-
-iOS übergibt Web-Apps nach dem Schließen des Pickers nur einmalige In-Memory-Bytes — keine
-Foto-URL, keine Foto-ID, kein persistentes Handle. Die einzige Web-API für persistente Handles
-(File System Access API) ist Chromium-only; ein Link wäre fragil (wird das Foto in der Fotos-App
-gelöscht, zeigt der Eintrag ins Leere; iCloud-Optimize ändert daran nichts). Daher:
-Kopie-Strategie.
+- Speicher-Report: `navigator.storage.estimate()` (Safari ab ~iOS 17, sonst ausblenden) + einmalig
+  `navigator.storage.persist()` (ab ~15.2) — beide per Feature-Detect.
 
 ### Datenmodell
 
 - Speicherung: re-enkodierte JPEG-Kopie ~2048 px, q≈0,85 (`blob`, 12-MP-Foto: 3–5 MB → 0,5–1 MB) +
   ~256-px-Thumbnail (`thumb`); das Original bleibt in der Fotos-App.
-- Attachment-Typ-Erweiterung (type-only, keine Schema-Änderung): `thumb?: Blob; mime?: string;
-width?: number; height?: number; name?: string; takenAt?: number` (`name` = Original-Dateiname
-  wie `IMG_4567.HEIC`, `takenAt` = Aufnahmedatum aus EXIF → manuelle Rückverfolgbarkeit in der
-  Fotos-App; EXIF-Parsing minimal halten, Fallback: Felder leer).
+- Attachment-Typ-Erweiterung (type-only, keine Schema-Änderung):
+  `thumb?: Blob; mime?: string; width?: number; height?: number`.
 
 ### Technische Wahl
 
@@ -125,9 +115,33 @@ width?: number; height?: number; name?: string; takenAt?: number` (`name` = Orig
   (`createImageBitmap`, Fallback `<img>` + Canvas), nach JPEG re-enkodieren; scheitert das:
   Original speichern, Thumb auslassen, Platzhalter. Skalierung via Canvas `drawImage`.
 
+### Teilen aus Fotos (Web Share Target) — beschlossen
+
+**Flow:** Foto in der Fotos-App markieren → Teilen → „Baby-Tagebuch“ → die PWA empfängt die
+Datei(en) direkt → **identische Ingestion-Pipeline** wie beim Picker (JPEG-Re-Enkodierung
+~2048 px + 256-px-Thumbnail) → Composer mit angehängtem Foto → Text → posten. Der Eintrag ist
+danach in sich geschlossen.
+
+**Konfiguration:** `share_target` im vite-plugin-pwa-Manifest, z. B. `{ action: '/baby-journal/',
+method: 'POST', enctype: 'multipart/form-data', params: { files: [{ name: 'photos', accept:
+['image/*'] }] } }` — nur für die installierte PWA, iOS 15.4+; Method/ENCTYPE (GET-Query vs.
+multipart-POST) und die Datei-Übergabe selbst im Spike verifizieren. **Fallback:** Scheitert Share
+Target auf iOS, bleibt der normale Foto-Picker der Hauptweg und Share Target wird gestrichen
+(Spike-Entscheidung dokumentieren).
+
+**Implementierungsregel:** eine gemeinsame `ingestImages(files)`-Funktion für Picker **UND** Share
+Target — keine Doppellogik.
+
 ### Aufwand
 
-M (1,5–2 Tage).
+M+ (2–2,5 Tage) — Share Target kostet ~0,5 Tag extra.
+
+### Akzeptanzkriterien
+
+- Foto in der Fotos-App → Teilen → „Baby-Tagebuch“: Foto landet mit re-enkodierter Kopie im
+  Composer (installierte PWA).
+- Bedingt: Scheitert die Datei-Übergabe im Spike, entfällt dieses Kriterium und die Entscheidung
+  wird dokumentiert.
 
 ### Teststrategie
 
@@ -169,7 +183,7 @@ iPhone (HEIC!) und macOS; der Blob-Roundtrip-Test bleibt grün.
 - Die App enthält nur Modell-IDs; lazy beim ersten Einsatz (nicht beim App-Start) mit byte-genauem
   Fortschritt; transformers.js cacht die Gewichte selbst im Cache-API-Speicher. Bereit-Marker
   (`voiceModelReady`) statt Netzwerk-Probe; `navigator.storage.persist()` deckt den Cache ab
-  (Feature-Detect, ab ~iOS 17).
+  (Feature-Detect; `persist()` ab ~15.2).
 - Cache-Verlust-Szenarien: Website-Daten löschen, PWA vom Home-Screen entfernen, Nutzung im
   normalen Safari-Tab (7-Tage-ITP-Regel — gilt **NICHT** für installierte PWAs) → erkannt über
   Marker/`load()`-Fehler, einzelne Dateien werden nachgeladen.
@@ -213,11 +227,11 @@ Hybrid-Ansatz federt), erster Download über Mobilfunk (WLAN-Hinweis).
 | 0     | Fundament: nur die 2 Deps, Tab-Shell, Composer-Slots, `src/lib/dates.ts` (+Tests) — kein `db.ts`-Diff | 0,5–1 |
 | 1     | Journal-CRUD                                                                                          | 0,5–1 |
 | 2     | Kalender (react-day-picker, Mini-Spike Tag 1)                                                         | 1–1,5 |
-| 3     | Bild-Anhänge                                                                                          | 1,5–2 |
+| 3     | Bild-Anhänge                                                                                          | 2–2,5 |
 | 4     | Voice komplett (Spike + Whisper + Caching + Stufe b)                                                  | 4–6   |
 | 5     | Integration & Polish, manueller iOS-Durchgang                                                         | 0,5   |
 
-Gesamt ≈ 8–11 Fokustage (eher ~10).
+Gesamt ≈ 9–12 Fokustage (eher ~10–11).
 
 ## Job-Split (parallelisierbar)
 
@@ -225,8 +239,11 @@ Gesamt ≈ 8–11 Fokustage (eher ~10).
   Deps (`react-day-picker` + `@huggingface/transformers`) — App-Shell (Tabs), Composer-Slots,
   `dates.ts` + Tests. Danach fassen B/C/D `package.json` nie an.
 - **Job B „Kalender“** (~1–1,5 d): `CalendarView.tsx`, `calendar-query.ts` + Tests, CSS-Overrides.
-- **Job C „CRUD + Fotos“** (~2–3 d): `EntryList`/`EntryCard`/`PhotoPicker`/Lightbox, `photos.ts` +
-  Tests, `storage.ts`.
+- **Job C „CRUD + Fotos“** (~2,5–3,5 d): `EntryList`/`EntryCard`/`PhotoPicker`/Lightbox,
+  `photos.ts` + Tests, `storage.ts`, Share Target — gemeinsam mit dem Picker über
+  `ingestImages(files)`; Akzeptanz: „Teilen aus Fotos“ endet mit re-enkodierter Kopie im Composer
+  (scheitert die Datei-Übergabe im Spike, entfällt Share Target und die Entscheidung wird
+  dokumentiert).
 - **Job D „Voice“** (~4–6 d): `src/voice/*`, `MicButton` (micSlot), exklusiv `vite.config.ts`
   (`runtimeCaching` nur ORT-CDN).
 - `src/db.ts` wird von keinem Job geändert. Merge-Reihenfolge B/C/D frei; Phase 5 verkabelt die
@@ -234,15 +251,16 @@ Gesamt ≈ 8–11 Fokustage (eher ~10).
 
 ## Plattform-Matrix
 
-| Feature                           | iOS Safari (PWA, Ziel)                                            | macOS Safari | macOS Chrome/Firefox         |
-| --------------------------------- | ----------------------------------------------------------------- | ------------ | ---------------------------- |
-| Kalender (react-day-picker), CRUD | ✓                                                                 | ✓            | ✓                            |
-| Fotos (nativer Picker)            | ✓ (HEIC→JPEG, Fallback)                                           | ✓            | ✓ (HEIC evtl. Platzhalter)   |
-| File System Access API            | ✗ (nicht genutzt)                                                 | ✗            | nur Chromium (nicht genutzt) |
-| Voice WASM q8                     | ✓ (AudioWorklet iOS 14.5+)                                        | ✓            | ✓                            |
-| Voice WebGPU                      | nur iOS 26+ (experimentell) → Fallback WASM                       | wie links    | experimentell                |
-| LLM-Verbesserung                  | nicht im initialen Scope — Nachrüstung erfordert WebGPU (iOS 26+) | wie links    | Chromium ✓ (experimentell)   |
-| storage.estimate/persist          | ab ~iOS 17 (Feature-Detect)                                       | ✓            | ✓                            |
+| Feature                           | iOS Safari (PWA, Ziel)                                                   | macOS Safari                               | macOS Chrome/Firefox                        |
+| --------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------ | ------------------------------------------- |
+| Kalender (react-day-picker), CRUD | ✓                                                                        | ✓                                          | ✓                                           |
+| Fotos (nativer Picker)            | ✓ (HEIC→JPEG, Fallback)                                                  | ✓                                          | ✓ (HEIC evtl. Platzhalter)                  |
+| Teilen aus Fotos (Share Target)   | ✓ installierte PWA ab iOS 15.4+ (Datei-Übergabe im Spike verifizieren)   | ✗                                          | ✗ (Desktop-Web-Apps ohne Share-Target-Flow) |
+| File System Access API            | ✗ (nicht genutzt)                                                        | ✗                                          | nur Chromium (nicht genutzt)                |
+| Voice WASM q8                     | ✓ (AudioWorklet iOS 14.5+)                                               | ✓                                          | ✓                                           |
+| Voice WebGPU                      | nur iOS 26+ (experimentell) → Fallback WASM                              | wie links                                  | experimentell                               |
+| LLM-Verbesserung                  | nicht im initialen Scope — Nachrüstung erfordert WebGPU (iOS 26+)        | Safari 26+ (experimentell) → Fallback WASM | Chromium ✓ (experimentell)                  |
+| storage.estimate/persist          | `estimate()` ab ~iOS 17, `persist()` ab ~15.2 (beide per Feature-Detect) | ✓                                          | ✓                                           |
 
 ## Datenschutz
 
@@ -265,19 +283,25 @@ Gesamt ≈ 8–11 Fokustage (eher ~10).
   per-Nutzungs-Latenz (Modell-Load aus Cache Sekunden bis ~20 s plus ~5–15 s Generierung) erschien
   zu teuer. Das regelbasierte Aufräumen (Stufe b) ist der Default. Nachrüstung als eigener Job
   jederzeit möglich — die Design-Entscheidungen dafür bleiben unten als Referenz dokumentiert.
+- **2026-11-27 — Foto-Strategie final: Eintrag = eigene komprimierte Kopie UND Web Share Target
+  („Teilen aus Fotos“) als zweiter Einstiegspfad.** Automatische Rückverfolgbarkeit in die Galerie
+  ist für Web-Apps auf iOS unmöglich (PhotoKit nur für native Apps) und wird nicht angestrebt. Die
+  zuvor erwogenen Metadaten `name`/`takenAt` (manuelle Rückverfolgung) werden verworfen — manuelle
+  Suche half dem Nutzer nicht weiter.
 
-### Foto-Kopie & Rückverfolgbarkeit
+### Warum kein Galerie-Link — und was stattdessen gilt (entschieden)
 
 **Warum ist keine Kopie vermeidbar?** Der iOS-Foto-Picker übergibt Web-Apps nur einmalige
 In-Memory-Bytes; es gibt keine Foto-ID/URL und keine persistenten Handles. Die File System Access
 API existiert nicht in Safari und ist Chromium-only; ein Link würde beim Löschen des Fotos ins
 Leere zeigen.
 
-**Beschlossene pragmatische Erweiterung:** Neben der JPEG-Kopie werden der **Original-Dateiname
-(`name?: string`, z. B. `IMG_4567.HEIC`) und das Aufnahmedatum (`takenAt?: number`, aus EXIF) als
-optionale Metadaten** im Attachment gespeichert → manuelle Wiederfindung in der Fotos-App über
-Name/Datum möglich; kein automatischer Link, kein Verstoß gegen die Galerie-Sandbox. (Umsetzung im
-späteren Foto-Job.)
+**Was stattdessen gilt (Entscheidung 2026-11-27):** Der Eintrag bleibt eine in sich geschlossene,
+komprimierte Kopie — automatische Rückverfolgbarkeit in die Galerie ist für Web-Apps auf iOS
+unmöglich (PhotoKit nur für native Apps) und wird nicht angestrebt. Als zweiter Einstiegspfad
+kommt „Teilen aus Fotos“ (Web Share Target) hinzu. Die zuvor erwogenen Metadaten `name`/`takenAt`
+(manuelle Rückverfolgung) werden verworfen — die manuelle Suche half dem Nutzer nicht weiter.
+Umsetzung: Feature 3; Picker und Share Target teilen sich `ingestImages(files)`.
 
 ### Modell-Laden & Performance
 
