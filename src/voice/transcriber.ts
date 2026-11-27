@@ -69,6 +69,13 @@ export function createWorkerTranscriber(): VoiceTranscriber {
     worker.onerror = (event) => {
       const err = new Error(event.message || 'voice worker failed');
       rejectAll(err);
+      // The worker is dead — leaving it installed would deadlock every
+      // following request (posts land in a terminated worker and the
+      // promises never settle). Drop it so the next send() builds a fresh
+      // one; persistent failure then surfaces as the load error with retry.
+      const dead = worker;
+      worker = null;
+      dead?.terminate();
     };
     return worker;
   }
