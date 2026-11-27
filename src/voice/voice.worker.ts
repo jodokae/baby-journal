@@ -173,6 +173,11 @@ async function buildPipeline(id: number, announceReady: boolean): Promise<AsrPip
 
 async function ensurePipeline(id: number) {
   if (asr) {
+    // A reused, still-loaded pipeline must not be disposed by a stale idle
+    // timer scheduled by the previous transcription: cancel the pending
+    // 60 s dispose here, or the pipeline could vanish mid-session between
+    // this `ready` and the next chunk (transcribe would then fail).
+    cancelIdleDispose();
     post({ type: 'ready', id });
     return;
   }

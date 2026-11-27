@@ -35,3 +35,34 @@ if (typeof Blob.prototype.text !== 'function') {
     });
   };
 }
+
+// fake-indexeddb clones stored values with the global structuredClone, and
+// that clone does not preserve Blob objects here (they come back as empty
+// plain objects) — every blob round trip through the database breaks: the
+// attachment strip would call URL.createObjectURL on a non-Blob and throw.
+// Probe once and, when the native clone loses a Blob, install a fallback
+// that deep-copies plain data and passes Blobs through by reference (close
+// enough for tests, which only ever run against fake-indexeddb).
+try {
+  const probe = new Blob(['probe'], { type: 'application/octet-stream' });
+  const cloned = structuredClone(probe) as Blob;
+  if (!(cloned instanceof Blob) || cloned.size !== probe.size) {
+    throw new Error('structuredClone does not preserve Blobs');
+  }
+} catch {
+  const deepClone = (value: unknown): unknown => {
+    if (value === null || typeof value !== 'object') return value;
+    if (value instanceof Blob) return value; // by reference
+    if (value instanceof Date) return new Date(value.getTime());
+    if (Array.isArray(value)) return value.map(deepClone);
+    if (ArrayBuffer.isView(value)) return (value as unknown as { slice: () => unknown }).slice();
+    if (value instanceof Map) {
+      return new Map([...value].map(([k, v]) => [deepClone(k), deepClone(v)]));
+    }
+    if (value instanceof Set) return new Set([...value].map(deepClone));
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value)) out[key] = deepClone(val);
+    return out;
+  };
+  globalThis.structuredClone = ((value: unknown) => deepClone(value)) as typeof structuredClone;
+}

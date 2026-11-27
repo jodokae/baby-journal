@@ -1,13 +1,25 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Entry, type EntryHistoryRow } from '../db';
+import {
+  db,
+  type Attachment,
+  type Entry,
+  type EntryHistoryRow,
+  type HistoryAttachment,
+} from '../db';
 import { dayKeyToNoon, dayRangeMs, toDayKey } from '../lib/dates';
 import {
   HISTORY_RETENTION_MS,
   pruneHistory,
   snapshotBeforeOverwrite,
   snapshotText,
+  stashRemovedAttachment,
 } from '../lib/history';
+import { ingestImages, type IngestError } from '../lib/ingest';
+import { SUPPORTED_ACCEPT } from '../lib/media';
+import { AttachmentStrip } from './AttachmentStrip';
+import { ConfirmDialog } from './ConfirmDialog';
+import { Lightbox } from './Lightbox';
 import './day-editor.css';
 
 const dayFormatter = new Intl.DateTimeFormat('de-DE', {
@@ -42,6 +54,22 @@ interface DayViewProps {
     setText: (s: string) => void;
     text: string;
   }) => ReactNode;
+}
+
+/**
+ * Maps a stored attachment to its history-vault shape: blob, thumbnail and
+ * every descriptive field (mime, pixel dimensions) — only the storage-side
+ * createdAt is dropped (the vault timestamps the removal itself).
+ */
+function toHistoryAttachment(attachment: Attachment): HistoryAttachment {
+  return {
+    kind: attachment.kind,
+    blob: attachment.blob,
+    ...(attachment.thumb !== undefined && { thumb: attachment.thumb }),
+    ...(attachment.mime !== undefined && { mime: attachment.mime }),
+    ...(attachment.width !== undefined && { width: attachment.width }),
+    ...(attachment.height !== undefined && { height: attachment.height }),
+  };
 }
 
 /**
@@ -93,6 +121,20 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
   const [text, setTextState] = useState(() => entry?.text ?? '');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // The attachment (by tile index) whose removal is being confirmed in the
+  // ConfirmDialog; null while no removal is pending.
+  const [confirmingRemoveIndex, setConfirmingRemoveIndex] = useState<number | null>(null);
+  // Photo ingestion: true while ingestImages (plus the follow-up write) runs.
+  const [ingesting, setIngesting] = useState(false);
+  // Per-file errors of the LAST ingest only — not global state. The next
+  // ingest replaces them (an error-free ingest clears the list).
+  const [ingestErrors, setIngestErrors] = useState<IngestError[]>([]);
+  // Index of the photo shown in the lightbox, resolved against the CURRENT
+  // attachments on every render (`attachments[index] ?? null`): when the
+  // array changed underneath, an out-of-range index closes the lightbox
+  // instead of showing the wrong photo.
+  const [openPhotoIndex, setOpenPhotoIndex] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Rows of undo history for this entry within the retention window; 0 while
   // the query has not delivered yet (and for days without an entry).
@@ -111,6 +153,11 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
   // Serializes every write for this day (saves, deletes, restores).
   const writeChainRef = useRef<Promise<void>>(Promise.resolve());
   const debounceRef = useRef<number | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Set by appendText: after the next render, keep the dictation's newest
+  // text in view. Manual typing never sets it — that would yank the
+  // viewport while the user scrolls or edits earlier text.
+  const scrollToEndRef = useRef(false);
 
   function enqueueWrite(write: () => Promise<void>) {
     const run = writeChainRef.current.then(write).catch((error) => {
@@ -176,8 +223,29 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
 
   /** Dictation helper: appends transcript text to the current content. */
   function appendText(appended: string) {
+    // Programmatic chunk: keep the growing end visible after the render.
+    scrollToEndRef.current = true;
     updateText(textRef.current + appended);
   }
+
+  // Auto-grow: the textarea is exactly as tall as its content — the PAGE
+  // scrolls, never the box itself. Runs for every text change (typing,
+  // dictation chunks, setText, restore, initial entry load). scrollHeight is
+  // always 0 in jsdom — the guard skips the height sync there (no layout),
+  // the dictation scroll below stays testable via a stubbed scrollIntoView.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (el.scrollHeight > 0) {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    }
+    if (scrollToEndRef.current) {
+      scrollToEndRef.current = false;
+      // Not implemented in jsdom — optional call keeps tests environment-free.
+      el.scrollIntoView?.({ block: 'end' });
+    }
+  }, [text]);
 
   // Flush on unmount (back button): nothing typed is lost even when the
   // debounce has not fired yet. Fire-and-forget — the write chain serializes
@@ -199,9 +267,70 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
     textRef.current = '';
     setTextState('');
     setConfirmingDelete(false);
+    setConfirmingRemoveIndex(null);
     const id = entry.id;
     // Serialized behind any in-flight save, so nothing writes to a deleted entry.
     void enqueueWrite(() => db.entries.delete(id));
+  }
+
+  /**
+   * Removes the attachment at `index` and stashes it in the history vault
+   * (48 h undo window). Serialized through the write chain with a fresh
+   * read — the liveQuery value may be stale. The entry STAYS even when its
+   * last attachment goes and the text is empty (empty-stays rule).
+   */
+  function removeAttachment(index: number) {
+    setConfirmingRemoveIndex(null);
+    const { start, end } = dayRangeMs(day);
+    void enqueueWrite(async () => {
+      const existing = await db.entries.where('createdAt').between(start, end, true, false).first();
+      if (!existing || existing.id === undefined) return;
+      const attachments = [...(existing.attachments ?? [])];
+      const [removed] = attachments.splice(index, 1);
+      if (!removed) return; // stale index — attachments changed in the meantime
+      // Stash FIRST: a crash between the two writes must never leave the
+      // photo gone without a vault row to undo the removal with.
+      await stashRemovedAttachment(existing.id, toHistoryAttachment(removed));
+      await db.entries.update(existing.id, { attachments });
+    });
+  }
+
+  /**
+   * Appends ingested photos to the day's entry — creating it when the day has
+   * none (empty text is fine; a photo-only entry shows textarea + tiles).
+   * Runs through the serialized write chain with a fresh read, exactly like
+   * persistText: it can never race a pending save into a second entry.
+   */
+  function appendPhotos(photos: Attachment[]): Promise<void> {
+    if (photos.length === 0) return Promise.resolve();
+    const { start, end } = dayRangeMs(day);
+    return enqueueWrite(async () => {
+      const existing = await db.entries.where('createdAt').between(start, end, true, false).first();
+      if (existing && existing.id !== undefined) {
+        await db.entries.update(existing.id, {
+          attachments: [...(existing.attachments ?? []), ...photos],
+        });
+      } else {
+        // Same createdAt mapping as the text path: today keeps Date.now(),
+        // any other day (past or future) is anchored at local noon.
+        const dayKey = toDayKey(day.getTime());
+        const createdAt = dayKey === toDayKey(Date.now()) ? Date.now() : dayKeyToNoon(dayKey);
+        await db.entries.add({ createdAt, type: 'note', text: '', attachments: photos });
+      }
+    });
+  }
+
+  /** Ingests the picked files, reports per-file errors and stores the photos. */
+  async function handleFilesPicked(files: File[]): Promise<void> {
+    if (ingesting || files.length === 0) return;
+    setIngesting(true);
+    try {
+      const result = await ingestImages(files);
+      setIngestErrors(result.errors);
+      await appendPhotos(result.photos);
+    } finally {
+      setIngesting(false);
+    }
   }
 
   /**
@@ -229,60 +358,179 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
     });
   }
 
+  /**
+   * Appends a stashed attachment back to the entry and DELETES its vault row
+   * — the vault is the single source of truth and empties on restore. Append
+   * runs first (a crash in between can duplicate a restore, but never loses
+   * the photo); no text snapshot is taken (adding is additive, not
+   * destructive). The panel stays open so several attachments can be
+   * restored in one go — the disappearing row is the feedback.
+   */
+  function restoreAttachmentRow(row: EntryHistoryRow) {
+    if (entry?.id === undefined) return;
+    const rowId = row.id;
+    if (rowId === undefined) return;
+    const id = entry.id;
+    void enqueueWrite(async () => {
+      // Re-read the vault row: a second tap before the liveQuery refreshes
+      // the panel must not re-append the attachment (idempotence) — when the
+      // row is gone the restore already happened.
+      const stashed = (await db.entryHistory.get(rowId))?.attachment;
+      if (!stashed) return;
+      // Fresh read: the entry may have vanished meanwhile — then the stash
+      // is kept (nothing is restored, nothing deleted).
+      const existing = await db.entries.get(id);
+      if (!existing || existing.id === undefined) return;
+      // Reconstruct the real attachment: blob, thumbnail and mime/width/
+      // height from the vault row, fresh createdAt.
+      await db.entries.update(id, {
+        attachments: [...(existing.attachments ?? []), { ...stashed, createdAt: Date.now() }],
+      });
+      await db.entryHistory.delete(rowId);
+    });
+  }
+
   return (
     <div className="day-editor">
+      {/*
+        Pinned action bar, directly below the nav: Verlauf + photo picker +
+        dictation slot on the left, the trash button on the right. Sticks
+        under the (safe-area) top edge while the page scrolls.
+      */}
+      <div className="day-action-bar">
+        <div className="day-action-bar-left">
+          {historyCount ? (
+            <button
+              type="button"
+              className="icon-action"
+              aria-label="Verlauf"
+              title="Verlauf"
+              onClick={() => setHistoryOpen(true)}
+            >
+              <span aria-hidden="true">🕘</span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="icon-action"
+            aria-label="Foto hinzufügen"
+            title="Foto hinzufügen"
+            disabled={ingesting}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <span aria-hidden="true">📎</span>
+          </button>
+          {/*
+            Dictation slot — the contract is documented on DayViewProps.micSlot:
+            appendText appends the transcript, setText replaces the live
+            dictated text with the final transcription, both reschedule the
+            auto-save like a user edit.
+          */}
+          {micSlot?.({ appendText, setText: updateText, text })}
+        </div>
+        <button
+          type="button"
+          className="icon-action danger"
+          aria-label="Eintrag löschen"
+          title="Eintrag löschen"
+          disabled={entry === undefined}
+          onClick={() => {
+            setConfirmingRemoveIndex(null);
+            setConfirmingDelete(true);
+          }}
+        >
+          <span aria-hidden="true">🗑️</span>
+        </button>
+      </div>
       <textarea
+        ref={textareaRef}
         value={text}
         onChange={(e) => updateText(e.target.value)}
         placeholder="Eintrag für diesen Tag …"
         aria-label="Eintrag für diesen Tag"
         maxLength={MAX_TEXT_LENGTH}
-        rows={3}
         autoFocus
       />
       {/*
-        Dictation slot — the contract is documented on DayViewProps.micSlot:
-        rendered between the textarea and the action row; appendText appends
-        the transcript, setText replaces the live dictated text with the final
-        transcription, both reschedule the auto-save like a user edit.
+        Current attachments of the entry (read-only while ingesting: pending
+        files only surface through the status line below until the write
+        lands and the liveQuery refreshes the strip).
       */}
-      {micSlot?.({ appendText, setText: updateText, text })}
-      {confirmingDelete ? (
-        <div className="delete-confirm">
-          <p>Wirklich löschen?</p>
-          <div className="day-actions">
-            <button type="button" className="danger" onClick={deleteEntry}>
-              Ja, löschen
-            </button>
-            <button type="button" onClick={() => setConfirmingDelete(false)}>
-              Abbrechen
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="day-actions">
-          {historyCount ? (
-            <button type="button" onClick={() => setHistoryOpen(true)}>
-              Verlauf
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="danger"
-            onClick={() => setConfirmingDelete(true)}
-            disabled={entry === undefined}
-          >
-            Löschen
-          </button>
-        </div>
+      <AttachmentStrip
+        attachments={entry?.attachments ?? []}
+        onOpen={setOpenPhotoIndex}
+        onRemove={(index) => {
+          setConfirmingDelete(false);
+          setConfirmingRemoveIndex(index);
+        }}
+      />
+      {ingesting && (
+        <p className="ingest-status" role="status">
+          Fotos werden verarbeitet …
+        </p>
+      )}
+      {ingestErrors.length > 0 && (
+        <ul className="ingest-errors" role="alert">
+          {ingestErrors.map((error) => (
+            <li key={error.fileName}>
+              {error.fileName}: {error.message}
+            </li>
+          ))}
+        </ul>
+      )}
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Eintrag wirklich löschen?"
+          confirmLabel="Löschen"
+          onConfirm={deleteEntry}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
+      {confirmingRemoveIndex !== null && (
+        <ConfirmDialog
+          title="Anhang wirklich entfernen?"
+          message="Er bleibt 48 Stunden im Verlauf wiederherstellbar."
+          confirmLabel="Entfernen"
+          onConfirm={() => removeAttachment(confirmingRemoveIndex)}
+          onCancel={() => setConfirmingRemoveIndex(null)}
+        />
       )}
       {historyOpen && entry?.id !== undefined && (
         <HistoryPanel
           entryId={entry.id}
           onClose={() => setHistoryOpen(false)}
           onRestore={restoreTextRow}
+          onRestoreAttachment={restoreAttachmentRow}
         />
       )}
+      {/*
+        Hidden picker: opened by the 📎 button above. The value is reset
+        immediately after reading the files so re-picking the same file
+        fires another change event.
+      */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={SUPPORTED_ACCEPT}
+        multiple
+        hidden
+        onChange={(event) => {
+          const picked = Array.from(event.target.files ?? []);
+          event.target.value = '';
+          void handleFilesPicked(picked);
+        }}
+      />
+      {/*
+        Full-screen view of the tapped photo, resolved against the CURRENT
+        attachments (see openPhotoIndex): a removed photo closes the lightbox
+        instead of showing the wrong one.
+      */}
+      <Lightbox
+        attachment={
+          openPhotoIndex === null ? null : ((entry?.attachments ?? [])[openPhotoIndex] ?? null)
+        }
+        onClose={() => setOpenPhotoIndex(null)}
+      />
     </div>
   );
 }
@@ -306,14 +554,18 @@ interface HistoryPanelProps {
   entryId: number;
   onClose: () => void;
   onRestore: (row: EntryHistoryRow) => void;
+  /** Restores a stashed attachment (appends it to the entry, deletes the row). */
+  onRestoreAttachment: (row: EntryHistoryRow) => void;
 }
 
 /**
  * Inline Verlauf panel: the entry's text snapshots (tap to restore) and
- * stashed attachments (informational until the photos integration wires
- * their restore).
+ * stashed attachments („Wiederherstellen" appends them back to the entry and
+ * deletes the vault row). The panel only renders while the entry exists (see
+ * the render condition in DayEditor), so the restore buttons are always
+ * enabled here; rows for deleted entries can simply not be shown.
  */
-function HistoryPanel({ entryId, onClose, onRestore }: HistoryPanelProps) {
+function HistoryPanel({ entryId, onClose, onRestore, onRestoreAttachment }: HistoryPanelProps) {
   // Pure read: dexie forbids readwrite transactions inside a liveQuery
   // querier, so stale rows are filtered here and physically pruned below.
   const rows = useLiveQuery(async () => {
@@ -389,7 +641,14 @@ function HistoryPanel({ entryId, onClose, onRestore }: HistoryPanelProps) {
                   <span className="history-preview">
                     Anhang ({attachmentLabel(row.attachment?.kind)})
                   </span>
-                  <span className="history-note">Wiederherstellen folgt</span>
+                  <button
+                    type="button"
+                    className="history-attachment-restore"
+                    aria-label={`Anhang vom ${historyTimestampFormatter.format(row.at)} wiederherstellen`}
+                    onClick={() => onRestoreAttachment(row)}
+                  >
+                    Wiederherstellen
+                  </button>
                 </div>
               </li>
             ),

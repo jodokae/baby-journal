@@ -38,6 +38,9 @@ export interface Entry {
 export interface HistoryAttachment {
   kind: Attachment['kind'];
   blob: Blob;
+  /** Kept so a restored photo renders its real tile, not a placeholder.
+   *  Type-only field of a non-indexed record: no schema or version change. */
+  thumb?: Blob;
   mime?: string;
   width?: number;
   height?: number;

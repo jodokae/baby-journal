@@ -66,8 +66,9 @@ export async function snapshotText(entryId: number, text: string): Promise<void>
 
 /**
  * Stashes a removed attachment so it can be offered for restore later. The
- * wiring into attachment removal comes with the photos-integration job; this
- * is exposed now and not called anywhere yet.
+ * DayView removal flow calls this before the entry update (stash-first, so a
+ * crash never loses the photo without a vault row); the Verlauf panel's
+ * „Wiederherstellen" appends it back and deletes the row.
  */
 export async function stashRemovedAttachment(
   entryId: number,
