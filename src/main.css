@@ -297,3 +297,154 @@ body {
 .delete-confirm .day-actions {
   margin: 0;
 }
+
+/* --- Backup banner + backup view --- */
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 1.25rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: var(--surface);
+}
+
+.backup-banner {
+  margin: 0.5rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.backup-banner-main {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.backup-banner-main p {
+  flex: 1;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.backup-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.backup-banner-actions .primary {
+  min-height: 44px;
+  padding: 0.45rem 1.1rem;
+  border: none;
+  border-radius: 0.75rem;
+  background: var(--accent);
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.backup-banner-actions .primary:disabled {
+  opacity: 0.5;
+}
+
+.backup-banner-actions .dismiss {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.25rem 0.5rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 1rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.backup-banner-error {
+  margin: 0.5rem 0 0;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.backup-section {
+  margin: 0.75rem 0;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.backup-section h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.backup-section p {
+  margin: 0.25rem 0;
+}
+
+.backup-section button {
+  min-height: 44px;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.backup-actions {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.backup-actions button {
+  min-height: 44px;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.backup-actions button:disabled {
+  opacity: 0.5;
+}
+
+.backup-message.success {
+  margin: 0.5rem 0;
+  font-size: 0.95rem;
+}
+
+.backup-message.error {
+  margin: 0.5rem 0;
+  color: var(--danger);
+  font-size: 0.95rem;
+}
