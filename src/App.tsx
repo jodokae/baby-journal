@@ -2,13 +2,6 @@ import { useState } from 'react';
 import CalendarView from './components/CalendarView';
 import DayView from './components/DayView';
 
-const dateFormatter = new Intl.DateTimeFormat('de-DE', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-});
-
 /**
  * Two screens, a plain state swap: the calendar (default) and the full-screen
  * view of one day. Month and selected day live here so they survive going back.
@@ -26,7 +19,6 @@ export default function App() {
         <>
           <header className="header">
             <h1>🍼 Baby-Tagebuch</h1>
-            <p className="date">{dateFormatter.format(new Date())}</p>
           </header>
           <CalendarView
             month={month}

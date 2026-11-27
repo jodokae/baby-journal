@@ -116,3 +116,13 @@ it('jumps back to the current month with the Heute button', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Heute' }));
   expect(screen.getByRole('heading', { level: 2 }).textContent).toContain(monthTitle);
 });
+
+it('places the Heute button below the grid, not in the header', () => {
+  const { container } = render(<ControlledCalendar />);
+
+  const footer = screen.getByRole('button', { name: 'Heute' }).closest('.calendar-footer');
+  expect(footer).toBeTruthy();
+  // The footer follows the DayPicker grid as a sibling section.
+  expect(footer?.previousElementSibling?.classList.contains('rdp-root')).toBe(true);
+  expect(container.querySelector('.calendar-header .today-button')).toBeNull();
+});
