@@ -51,15 +51,15 @@ body {
   font-size: 1.5rem;
 }
 
-/* --- Voice dictation (micSlot between textarea and the action row) --- */
+/* --- Voice dictation (mic slot in the pinned day-editor action bar) --- */
 
-/* The slot wraps onto its own row below textarea + submit button. */
+/* The dictation control stacks its button above its status line; where the
+   slot sits in the bar (flex-basis, margins) is owned by
+   .day-action-bar .mic-slot in day-editor.css. */
 .mic-slot {
-  flex-basis: 100%;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  margin-top: 0.25rem;
 }
 
 .mic-button {

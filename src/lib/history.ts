@@ -1,4 +1,4 @@
-import { db, type EntryHistoryRow, type HistoryAttachment } from '../db';
+import { db, type HistoryAttachment } from '../db';
 
 /** History rows older than this are deleted. */
 export const HISTORY_RETENTION_MS = 48 * 60 * 60 * 1000;
@@ -108,12 +108,4 @@ async function pruneOverflow(): Promise<void> {
 export async function pruneHistory(): Promise<void> {
   await pruneExpired();
   await pruneOverflow();
-}
-
-/** Rows for one entry, newest first, with stale and overflowing rows pruned.
- * Not usable inside a dexie liveQuery querier (writes are forbidden there) —
- * the Verlauf panel filters by retention instead and prunes on mount. */
-export async function listHistory(entryId: number): Promise<EntryHistoryRow[]> {
-  await pruneHistory();
-  return db.entryHistory.where('entryId').equals(entryId).reverse().toArray();
 }
