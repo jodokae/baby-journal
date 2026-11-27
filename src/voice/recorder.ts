@@ -5,14 +5,17 @@
  * the mic-button tap handler — iOS only grants the permission prompt within the
  * user-gesture call chain, and the Pages deployment is HTTPS so the API exists.
  *
- * Audio is captured with an AudioContext requested at 16 kHz; if the browser
- * ignores the requested rate (older Safari), a small linear resampler bridges
- * the gap so the transcriber always sees 16 kHz audio. Chunks of ~4 s with a
- * 1 s overlap are emitted for live transcription while the full recording is
- * kept for the final, higher-quality pass. Recording is capped at 10 minutes.
+ * Audio is captured with an AudioContext at the DEVICE rate — a requested
+ * rate (e.g. 16 kHz) makes WebKit deliver mic samples at the hardware rate
+ * into the rate-hinted context, time-warping the audio — and every worklet
+ * message is resampled to 16 kHz, so the transcriber always sees 16 kHz
+ * audio. Chunks of ~4 s with a 1 s overlap are emitted for live
+ * transcription while the full recording is kept for the final,
+ * higher-quality pass. Recording is capped at 10 minutes.
  *
  * jsdom has no AudioContext/AudioWorklet — the hook tests use injectable fakes
- * (see useVoice.ts); only the pure resampler is tested here.
+ * (see useVoice.ts), the capture start is tested over faked Web Audio in
+ * recorder.test.ts, and the pure resampler is tested directly.
  */
 
 export const SAMPLE_RATE = 16000;
@@ -145,11 +148,12 @@ export function createRecorder(): VoiceRecorder {
 
   function onWorkletMessage(event: MessageEvent<Float32Array>) {
     if (!context) return;
-    const incoming =
-      context.sampleRate === SAMPLE_RATE
-        ? event.data
-        : resampleLinear(event.data, context.sampleRate, SAMPLE_RATE);
-    append(incoming);
+    // The context runs at the device rate (start() passes no sampleRate
+    // hint), so EVERY message takes the resampler — a context that happens
+    // to run at 16 kHz is passed through inside resampleLinear. The worklet
+    // posts ~100 ms batches, which map to exactly 1600 samples at any device
+    // rate, so per-message truncation is at most a fraction of one sample.
+    append(resampleLinear(event.data, context.sampleRate, SAMPLE_RATE));
   }
 
   return {
@@ -178,14 +182,11 @@ export function createRecorder(): VoiceRecorder {
         return;
       }
 
-      try {
-        context = new AudioContext({ sampleRate: SAMPLE_RATE });
-      } catch {
-        // Very old Safari rejects arbitrary sample rates — capture at the
-        // device rate and resample manually instead.
-        context = null;
-      }
-      if (!context) context = new AudioContext();
+      // Capture at the DEVICE rate (no sampleRate hint): a requested rate
+      // makes WebKit deliver mic samples at the hardware rate into the
+      // rate-hinted context, time-warping the audio. onWorkletMessage
+      // resamples every message to 16 kHz instead.
+      context = new AudioContext();
       // WebKit starts the context `suspended` when its construction crossed an
       // await boundary (the permission prompt): the tap gesture no longer
       // counts, and a suspended context never runs the worklet — zero audio
