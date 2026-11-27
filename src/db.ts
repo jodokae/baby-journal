@@ -34,8 +34,33 @@ export interface Entry {
   attachments: Attachment[];
 }
 
+/** Snapshot of a removed attachment, stored in the entry history (v3). */
+export interface HistoryAttachment {
+  kind: Attachment['kind'];
+  blob: Blob;
+  mime?: string;
+  width?: number;
+  height?: number;
+}
+
+/** One row of the entryHistory table: a text snapshot or a stashed attachment. */
+export interface EntryHistoryRow {
+  id?: number;
+  /** The entry this snapshot belongs to. */
+  entryId: number;
+  /** When the snapshot was taken (epoch ms). */
+  at: number;
+  kind: 'text' | 'attachment';
+  /** The previous text, for kind 'text'. */
+  text?: string;
+  /** The stashed attachment, for kind 'attachment'. */
+  attachment?: HistoryAttachment;
+}
+
 export class BabyJournalDB extends Dexie {
   entries!: Table<Entry, number>;
+  /** Text snapshots and stashed attachments for the 48 h undo history (v3). */
+  entryHistory!: Table<EntryHistoryRow, number>;
 
   constructor() {
     super('baby-journal');
@@ -47,6 +72,12 @@ export class BabyJournalDB extends Dexie {
     // v2: one-time data wipe — the user chose to start fresh with the
     // one-entry-per-day model (device-only data, no backup, confirmed 2026-11-27).
     this.version(2).stores({ entries: ENTRY_STORES }).upgrade(clearAllEntries);
+    // v3: 48h undo history — text snapshots before overwrites + stashed removed
+    // attachments. New, empty table; no data migration.
+    this.version(3).stores({
+      entries: ENTRY_STORES,
+      entryHistory: '++id, entryId, at',
+    });
   }
 }
 

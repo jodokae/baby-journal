@@ -1,5 +1,5 @@
 /**
- * Dictation control rendered through the Composer's micSlot render prop.
+ * Dictation control rendered through the DayView's micSlot render prop.
  *
  * Owns three things:
  * - the mic button with German labels/aria for every state,
@@ -10,9 +10,20 @@
  *   text, never to the live text.
  */
 import { useEffect, useRef, useState } from 'react';
-import type { MicSlotHelpers } from './Composer';
 import { removeFillerWords } from '../voice/cleanup';
 import { useVoice } from '../voice/useVoice';
+
+/**
+ * Helpers handed to the `micSlot` render prop (see `DayViewProps.micSlot`):
+ * `appendText` appends to the editor text, `setText` replaces it — both behave
+ * exactly like a user edit and reschedule the debounced auto-save — and
+ * `text` is the current editor content.
+ */
+export interface MicSlotHelpers {
+  appendText: (s: string) => void;
+  setText: (s: string) => void;
+  text: string;
+}
 
 const CLEANUP_KEY = 'voiceFillerCleanup';
 

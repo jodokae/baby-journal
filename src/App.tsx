@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import BackupView from './components/BackupView';
 import CalendarView from './components/CalendarView';
 import DayView from './components/DayView';
+import MicButton from './components/MicButton';
+import { pruneHistory } from './lib/history';
 import { useDailyBackupBanner } from './lib/useDailyBackupBanner';
 
 /**
@@ -16,12 +18,22 @@ export default function App() {
   const [backupOpen, setBackupOpen] = useState(false);
   const banner = useDailyBackupBanner();
 
+  // Opportunistic housekeeping: drop undo-history rows older than 48 h once
+  // per app open (listing history prunes again before it shows rows).
+  useEffect(() => {
+    void pruneHistory();
+  }, []);
+
   return (
     <main className="app">
       {backupOpen ? (
         <BackupView onBack={() => setBackupOpen(false)} />
       ) : dayOpen && selectedDay ? (
-        <DayView day={selectedDay} onBack={() => setDayOpen(false)} />
+        <DayView
+          day={selectedDay}
+          onBack={() => setDayOpen(false)}
+          micSlot={(helpers) => <MicButton {...helpers} />}
+        />
       ) : (
         <>
           <header className="header">
