@@ -32,9 +32,6 @@ const dayFormatter = new Intl.DateTimeFormat('de-DE', {
 /** Debounce window after the last change before the text is persisted. */
 const AUTOSAVE_DELAY_MS = 1000;
 
-/** Same cap as the textarea's maxLength — enforced in code for programmatic text. */
-const MAX_TEXT_LENGTH = 2000;
-
 interface DayViewProps {
   /** The day this screen shows. */
   day: Date;
@@ -168,9 +165,7 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
   }
 
   async function persistText(value: string) {
-    // Last line of defense for the length cap: typed input is capped by the
-    // DOM, programmatic text (dictation) is clamped here as well.
-    const trimmed = value.trim().slice(0, MAX_TEXT_LENGTH);
+    const trimmed = value.trim();
     const { start, end } = dayRangeMs(day);
     // Fresh read instead of the possibly stale liveQuery value: a previous
     // save in the chain may have created the entry in the meantime.
@@ -211,14 +206,13 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
 
   /**
    * One code path for every text change: user typing and dictation alike.
-   * Clamped to the same cap as the textarea's DOM maxlength, which only
-   * covers typed input — programmatic text (appends and setText replacing a
-   * transcript) must not diverge from what persistText will store.
+   * The text is stored as typed — no length cap, programmatic text (appends
+   * and setText replacing a transcript) never diverges from what persistText
+   * will store.
    */
   function updateText(value: string) {
-    const clamped = value.slice(0, MAX_TEXT_LENGTH);
-    setTextState(clamped);
-    scheduleSave(clamped);
+    setTextState(value);
+    scheduleSave(value);
   }
 
   /** Dictation helper: appends transcript text to the current content. */
@@ -448,7 +442,6 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
         onChange={(e) => updateText(e.target.value)}
         placeholder="Eintrag für diesen Tag …"
         aria-label="Eintrag für diesen Tag"
-        maxLength={MAX_TEXT_LENGTH}
         autoFocus
       />
       {/*

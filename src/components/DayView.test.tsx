@@ -118,7 +118,6 @@ async function seedEntry(text: string, attachments: Attachment[] = []): Promise<
 
 it('auto-saves a new entry about a second after the last change', async () => {
   await renderEditor();
-  expect(field().maxLength).toBe(2000);
 
   fireEvent.change(field(), { target: { value: 'Erster Tag' } });
   expect(await db.entries.count()).toBe(0); // no immediate write while typing
@@ -512,8 +511,8 @@ it('keeps the existing entry when setText via the mic slot clears the text', asy
 
   fireEvent.click(screen.getByRole('button', { name: 'Leeren' }));
   await saveAfterDebounce();
-  // The clamp is length-only: whitespace text stays whitespace, so the
-  // empty-stays logic (not the clamp) decides what happens to the entry.
+  // Whitespace text stays whitespace, so the empty-stays logic (not a
+  // length clamp) decides what happens to the entry.
   expect(field().value).toBe('   ');
 
   const all = await db.entries.toArray();
@@ -521,13 +520,13 @@ it('keeps the existing entry when setText via the mic slot clears the text', asy
   expect(all[0].text).toBe('Bleibt'); // empty text never deletes the entry
 });
 
-it('clamps dictation appends to the 2000-character cap and still auto-saves', async () => {
+it('accepts dictation appends beyond the old cap and still auto-saves', async () => {
   await renderEditor(
     <DayView
       day={now}
       onBack={vi.fn()}
       micSlot={({ appendText }) => (
-        <button type="button" onClick={() => appendText('x'.repeat(2100))}>
+        <button type="button" onClick={() => appendText('x'.repeat(3000))}>
           Diktieren
         </button>
       )}
@@ -535,21 +534,21 @@ it('clamps dictation appends to the 2000-character cap and still auto-saves', as
   );
 
   fireEvent.click(screen.getByRole('button', { name: 'Diktieren' }));
-  expect(field().value).toHaveLength(2000); // clamped like typed input
+  expect(field().value).toHaveLength(3000); // nothing clamps programmatic text
 
   await saveAfterDebounce();
   const all = await db.entries.toArray();
   expect(all).toHaveLength(1);
-  expect(all[0].text).toHaveLength(2000);
+  expect(all[0].text).toHaveLength(3000);
 });
 
-it('clamps a long final transcription sent through setText to the 2000-character cap', async () => {
+it('accepts a long final transcription sent through setText in full', async () => {
   await renderEditor(
     <DayView
       day={now}
       onBack={vi.fn()}
       micSlot={({ setText }) => (
-        <button type="button" onClick={() => setText('y'.repeat(2500))}>
+        <button type="button" onClick={() => setText('y'.repeat(3000))}>
           Finalisieren
         </button>
       )}
@@ -557,12 +556,12 @@ it('clamps a long final transcription sent through setText to the 2000-character
   );
 
   fireEvent.click(screen.getByRole('button', { name: 'Finalisieren' }));
-  expect(field().value).toHaveLength(2000); // editor shows the clamped text, no divergence
+  expect(field().value).toHaveLength(3000); // editor shows the full text, no divergence
 
   await saveAfterDebounce();
   const all = await db.entries.toArray();
   expect(all).toHaveLength(1);
-  expect(all[0].text).toHaveLength(2000);
+  expect(all[0].text).toHaveLength(3000);
 });
 
 it('shows the Verlauf button only when the entry has history', async () => {
