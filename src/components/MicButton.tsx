@@ -63,8 +63,9 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
   // (word-level, dedup-normalized) instead of against the appended span, which
   // keeps mirroring alive when the merge rewrites the prefix.
   const lastLiveRef = useRef('');
-  // Whether the composer had text during this session. The cleared-entry guard
-  // must not confuse "cleared after submit" with "not yet populated": the
+  // Whether the editor text has been non-empty at some point during this
+  // dictation session. The cleared-entry guard must not confuse "cleared
+  // after it had content" with "not yet populated while dictating": the
   // first mirrored chunk lands in an update that the same render's guard
   // effect still sees as `text === ''`.
   const hadTextRef = useRef(false);
@@ -141,10 +142,11 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
     // apart, so the closure is never stale in practice.
   }, [voice.liveText, voice.phase]);
 
-  // A submitted (or fully cleared) entry ends the dictation session: without
-  // this the next live chunk would land in the composer for the NEXT entry.
-  // Only a non-empty → empty transition counts — dictating starts in an empty
-  // composer and its first mirrored chunk arrives in an update the guard
+  // An emptied editor ends the dictation session: without this the next live
+  // chunk would append into the text of a fresh, unrelated entry that happens
+  // to show next. Only a non-empty → empty transition counts (dictation
+  // mirrors live into the always-editable editor text, which often starts
+  // out empty) — its first mirrored chunk arrives in an update the guard
   // still sees as empty.
   useEffect(() => {
     if (text !== '') hadTextRef.current = true;

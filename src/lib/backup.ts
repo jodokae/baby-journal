@@ -283,9 +283,10 @@ export function entriesFromBackup(backup: BackupFile, codec: BackupCodec = defau
 }
 
 /**
- * Optional table with 48h undo snapshots, added by a later schema version.
- * Referenced only dynamically (never typed, never created here) so this
- * module stays compatible with today's v1/v2 schema.
+ * The entry-history table holds the 48 h undo snapshots (added by schema v3).
+ * Referenced only dynamically (never typed, never created here) — the restore
+ * looks it up via `tables`, so it is cleared on schemas that have it and the
+ * clear is skipped on schemas without it.
  */
 export const ENTRY_HISTORY_TABLE = 'entryHistory';
 

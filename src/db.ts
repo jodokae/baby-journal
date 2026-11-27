@@ -8,7 +8,7 @@ export function clearAllEntries(tx: Transaction): Promise<void> {
   return tx.table('entries').clear();
 }
 
-/** Art des Eintrags – spätere Versionen erweitern dies um Füttern/Schlaf/Wickeln etc. */
+/** Kind of entry – later versions extend this with feeding/sleeping/diapers etc. */
 export type EntryType = 'note';
 
 export interface Attachment {
@@ -67,8 +67,10 @@ export class BabyJournalDB extends Dexie {
 
   constructor() {
     super('baby-journal');
-    // SCHEMA-REGEL: Bestehende Versionen nach dem ersten Deploy nie mehr ändern!
-    // Änderungen immer als neue db.version(n+1) mit upgrade() ergänzen, siehe AGENTS.md.
+    // SCHEMA RULE: after the first deploy, never modify an existing
+    // db.version(n).stores() declaration again — device data would be
+    // irrecoverably lost. Always add changes as a new db.version(n+1) with
+    // upgrade() instead (see AGENTS.md).
     this.version(1).stores({
       entries: ENTRY_STORES,
     });

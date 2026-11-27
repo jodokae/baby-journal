@@ -3,14 +3,11 @@ import { db } from '../db';
 import {
   HISTORY_MAX_ROWS_PER_ENTRY,
   HISTORY_RETENTION_MS,
-  listHistory,
   pruneHistory,
   snapshotBeforeOverwrite,
   snapshotText,
   stashRemovedAttachment,
 } from './history';
-
-const HOUR_MS = 60 * 60 * 1000;
 
 // Fake only the clock: Dexie/fake-indexeddb need real timers to progress,
 // while every time-dependent assertion here goes through Date.now().
@@ -66,7 +63,9 @@ it('snapshots immediately on a radical shrink, ignoring the throttle', async () 
   vi.advanceTimersByTime(10_000);
   await snapshotBeforeOverwrite(id, 'c'.repeat(45), 'd'); // select-all + delete
   expect(await db.entryHistory.count()).toBe(2);
-  expect((await listHistory(id))[0]).toMatchObject({ kind: 'text', text: 'c'.repeat(45) });
+  // The newest snapshot of this entry is the one just taken.
+  const newest = await db.entryHistory.where('entryId').equals(id).reverse().toArray();
+  expect(newest[0]).toMatchObject({ kind: 'text', text: 'c'.repeat(45) });
 });
 
 it('does not snapshot when the new text is identical', async () => {
@@ -104,20 +103,6 @@ it('stashes removed attachments as attachment rows', async () => {
   expect(row).toMatchObject({ entryId: id, kind: 'attachment' });
   expect(row?.attachment?.kind).toBe('photo');
   expect(row?.attachment?.mime).toBe('image/png');
-});
-
-it('listHistory returns the rows of one entry newest first and prunes first', async () => {
-  const id = await seedEntry();
-  const other = await seedEntry('Anderer Eintrag');
-  await db.entryHistory.bulkAdd([
-    { entryId: id, at: Date.now() - 49 * HOUR_MS, kind: 'text', text: 'zu alt' },
-    { entryId: id, at: Date.now() - 2 * HOUR_MS, kind: 'text', text: 'mittel' },
-    { entryId: other, at: Date.now() - HOUR_MS, kind: 'text', text: 'fremd' },
-  ]);
-  await snapshotText(id, 'aktuell');
-
-  const rows = await listHistory(id);
-  expect(rows.map((row) => row.text)).toEqual(['aktuell', 'mittel']); // 'zu alt' pruned (> 48 h)
 });
 
 it('pruneHistory keeps the row exactly at the 48 h boundary and deletes older ones', async () => {

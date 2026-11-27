@@ -7,7 +7,7 @@ beforeEach(async () => {
   await db.entryHistory.clear();
 });
 
-it('speichert und liest Einträge mit Anhängen', async () => {
+it('stores and reads entries with attachments', async () => {
   const blob = new Blob(['fake-image-data'], { type: 'image/png' });
   const id = await db.entries.add({
     createdAt: Date.now(),
