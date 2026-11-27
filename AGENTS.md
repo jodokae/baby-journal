@@ -35,6 +35,7 @@ Safari → open the Pages URL → Share → **"Zum Home-Bildschirm"**. It then r
 - TypeScript `strict`; `verbatimModuleSyntax` is on — use `import type` for type-only imports.
 - Tests live next to the code as `*.test.ts(x)`. Use `src/test-setup.ts` for global test setup (it loads `fake-indexeddb`).
 - Prettier formatting; run `npm run format` before pushing.
+- Per-component CSS files — `src/main.css` stays tokens/base only. Screens (App, CalendarView, DayView, BackupView) use default exports; shared widgets (AttachmentStrip, Lightbox, ConfirmDialog) use named exports.
 - No user data, no real journal content, no secrets in the repo — the repo is code only.
 - **Merge mode: auto (local merges only)** — feature branches are merged into main locally (fast-forward when possible) as soon as review passes; no per-branch merge confirmation needed. **Agents never push** — the user performs all pushes (a push to main triggers the GitHub Pages deploy (`deploy.yml`)).
 
@@ -49,18 +50,27 @@ Safari → open the Pages URL → Share → **"Zum Home-Bildschirm"**. It then r
 
 ## Architecture map
 
-- `src/db.ts` — Dexie database + types (`Entry`, `Attachment`); schema versioning here.
-- `src/App.tsx` — main screen (currently: notes with timestamps, live query).
+- `src/App.tsx` — screen shell: calendar ↔ full-screen day editor ↔ „Daten & Backup“ view, plus the daily backup-due popup; `sessionStorage` restores the open day across reloads.
+- `src/components/` — App, CalendarView, DayView (mode-less auto-save editor, 48 h Verlauf panel built in), MicButton, AttachmentStrip, Lightbox, ConfirmDialog, BackupView.
+- `src/lib/` — dates, calendar-query, history (text snapshots + stashed attachments), backup (export/import + daily-reminder state), media, thumbnails, ingest, object-url, storage; `useDailyBackupBanner.ts` backs the daily popup.
+- `src/voice/` — on-device Whisper dictation chain: useVoice, recorder, transcriber, voice.worker, dedup, pcm-worklet (plus protocol types).
+- `src/db.ts` — Dexie database + types (`Entry`, `Attachment`, `EntryHistoryRow`); schema versioning v1→v3 here (v2 = one-time wipe, v3 = `entryHistory`). Data model rules below apply.
 - `src/main.tsx` — React entry + service-worker registration (`virtual:pwa-register`).
-- `src/main.css` — plain CSS, CSS variables, light/dark via `prefers-color-scheme`, safe-area padding for standalone mode.
+- `src/main.css` — tokens/base only: CSS variables, light/dark via `prefers-color-scheme`, safe-area padding for standalone mode; components carry their own CSS files.
+- `src/test-setup.ts` — global test setup (loads `fake-indexeddb`, guarded jsdom polyfill stubs).
 - `index.html` — PWA/iOS meta tags (`apple-touch-icon`, web-app-capable, theme colors).
 - `vite.config.ts` — Vite + `vite-plugin-pwa` (manifest, service worker) + Vitest config.
 - `scripts/generate-icons.mjs` — generates `public/icons/*.png` (pure Node, run `npm run icons`).
 - `.github/workflows/deploy.yml` — test + build + GitHub Pages deploy on push to `main`.
+- `docs/FEATURE_PLAN.md` — durable decision log (German, append-only): new decisions go into „Entscheidungen & FAQ“, existing entries are never rewritten.
 
-## Roadmap (agreed, not yet built)
+## Roadmap
 
-1. Structured event types (feed/sleep/diaper) on top of `Entry.type`.
-2. Photo/video attachments via file picker (`<input type="file">`), stored as Blobs.
-3. JSON export/import as backup (data is device-only, so this is the safety net).
-4. On-device voice-to-text (iOS keyboard dictation works out of the box; Whisper via WASM/WebGPU optional) and small on-device LLM (WebGPU/WebLLM).
+**Built:** calendar-first day entries (one editable entry per day), photo attachments
+with a 48 h undo history, on-device Whisper dictation (German, verbatim), backup/restore
+plus a daily export reminder.
+
+**Not built:** structured event types (feed/sleep/diaper) on top of `Entry.type`; LLM
+post-processing of the dictation (explicitly descoped); the „Teilen aus Fotos“ share
+target (needs an on-device spike first). Remaining ideas live in
+`docs/FEATURE_PLAN.md`, decisions append-only.

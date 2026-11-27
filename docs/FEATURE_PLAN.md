@@ -10,6 +10,23 @@ Dieser Plan ist die dauerhafte, technische Referenz der vereinbarten Features �
 planende Session verloren geht. Neue Entscheidungen ergänzen nur den Abschnitt
 „Entscheidungen & FAQ“; bestehende werden nicht geändert.
 
+## Aktueller Stand (nach R3)
+
+**Gepflegte Referenz des FINAL gebauten Stands (2026-11-27, nach allen R3-Jobs).** Die
+Feature-Abschnitte und das Ist-Zustand darunter sind historisch — sie bleiben gemäß der
+Append-only-Regel unangetastet und beschreiben teils den ursprünglichen Plan, der von den
+eingetragenen Entscheidungen übersteuert wurde. Jede Zeile nennt das Datum der sie
+übersteuernden Entscheidungen im Entscheidungslog (dort weiter unten).
+
+| Feature        | Finaler Zustand                                                                                                                                                                                                                                                                                                                                                                  | Log        |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 1 · Kalender   | Kalender-first statt Tabs: Monatstabular als einzige Übersicht, Tipp auf einen Tag öffnet die Vollbild-Tagesansicht; **ein Eintrag pro Tag** (Composer nur an Tagen ohne Eintrag, Zukunft ohne Eingabe); Verlauf-Ansicht im Tageseditor.                                                                                                                                         | 2026-11-27 |
+| 2 · CRUD       | Inline-Bearbeitung entfällt → mode-less Auto-Save-Editor (~1 s Debounce, Flush beim Verlassen; leere Einträge bleiben bestehen); Löschen nur mit Bestätigungsschritt (keine Undo-Snackbar).                                                                                                                                                                                      | 2026-11-27 |
+| 3 · Fotos      | Datei-Picker → gemeinsamer Ingest (komprimierte JPEG-Kopie ~2048 px + ~256-px-Thumb) → AttachmentStrip + Lightbox, Blobs direkt in `Entry.attachments`. Der Share-Target-Einstieg „Teilen aus Fotos“ ist **nicht gebaut** (Bedarf noch ungeklärt), der Rest wie beschrieben. Videos nicht im Scope.                                                                              | 2026-11-27 |
+| 4 · Voice      | On-Device-Diktat (Whisper, siehe Feature 4) ist gebaut und **wortgetreu (verbatim)**: Realtime-Chunks ins Textfeld, keine Regel-Aufräumung und kein LLM im Flow (beides entfernt bzw. aus dem Scope); manuelle Nachbearbeitung im Editor. Playwright-E2E der Dictation-Chain (Fake-ASR + lokaler Modell-Host) ist „in Vorbereitung“ — eigener Zweig, Merge in `main` noch offen. | 2026-11-27 |
+| Backup & Daten | `navigator.storage.persist()` beim App-Start; tägliches Export-Erinnerungspopup beim ersten Start des Tages (ein Tap = Export via Web Share → „In Dateien sichern“, Fallback Download); „Daten & Backup“-Ansicht mit Speicherverbrauch/Persistenz-Status/letztem Backup; manueller JSON-Export (Anhänge als Base64) + Import mit Überschreib-Bestätigung.                        | 2026-11-27 |
+| Datenbank      | `version(1)` unverändert (`entries: '++id, createdAt, type'`), **`version(2)` = Einmal-Wipe** („Leer neu anfangen“), **`version(3)` = neue Tabelle `entryHistory`** (Text-Snapshots vor Overwrites + eingefangene entfernte Anhänge; 48 h Aufbewahrung, Cap 50/Eintrag).                                                                                                         | 2026-11-27 |
+
 ## Ist-Zustand
 
 - Das Dexie-Schema ist Version 1 (`entries: '++id, createdAt, type'`, `src/db.ts:27-29`) und bleibt
