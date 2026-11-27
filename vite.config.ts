@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
+import { configDefaults } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -13,17 +14,25 @@ import { VitePWA } from 'vite-plugin-pwa';
 // needs the {mjs, wasm} object form we provide) next to the model weights —
 // no workbox runtimeCaching (it would store the binary twice) and no manual
 // precache entries (model + runtime download lazily on first dictation use).
-// The oversized runtime files are excluded from the precache manifest by
-// workbox itself; showMaximumFileSizeToCacheInBytesWarning turns the
-// hard build error into the intended informational warning.
+// They are excluded from the precache manifest with an explicit
+// workbox.globPatterns negation below instead of a global warning flag, so
+// any future oversized dist asset still fails the build.
 export default defineConfig({
   base: '/baby-journal/',
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      showMaximumFileSizeToCacheInBytesWarning: true,
       includeAssets: ['icons/apple-touch-icon.png', 'icons/favicon.png'],
+      workbox: {
+        // Explicit, auditable precache glob: workbox-build 7.4 would pick up
+        // the locally bundled ONNX Runtime files (its default glob is
+        // **/*.{js,wasm,css,html}). They must NOT be precached — they load
+        // lazily on first dictation use and are cached by transformers.js in
+        // the Cache API (see voice.worker.ts). Any NEW oversized asset still
+        // fails the build (no global warning suppression).
+        globPatterns: ['**/*.{js,css,html}', '!**/ort-wasm-*'],
+      },
       manifest: {
         name: 'Baby-Tagebuch',
         short_name: 'Baby',
@@ -54,5 +63,9 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test-setup.ts',
     globals: true,
+    // Keep the vitest defaults and never sweep outside the project tree: a
+    // full-repo run must not error on untracked .opencode/skills files or on
+    // other jobs' in-flight .worktrees/** directories.
+    exclude: [...configDefaults.exclude, '.opencode/**', '.worktrees/**'],
   },
 });
