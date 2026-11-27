@@ -13,8 +13,10 @@ function toWords(text: string): string[] {
   return text.trim().split(/\s+/).filter(Boolean);
 }
 
-/** Comparison form: lowercased, stripped of punctuation — „schön." === „Schön". */
-function comparable(word: string): string {
+/** Comparison form: lowercased, stripped of punctuation — „schön." === „Schön".
+ *  Exported so the live mirror (MicButton) diffs new chunks with exactly the
+ *  normalization whose re-renderings it must tolerate. */
+export function comparable(word: string): string {
   return word.toLowerCase().replace(/[.,!?;:„“"']/gu, '');
 }
 

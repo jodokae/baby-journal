@@ -9,6 +9,7 @@
  *   verbatim by design: dictation is never automatically rewritten.
  */
 import { useEffect, useRef } from 'react';
+import { comparable } from '../voice/dedup';
 import { useVoice } from '../voice/useVoice';
 
 /**
@@ -27,11 +28,41 @@ function formatPercent(progress: number): string {
   return `${Math.min(100, Math.max(0, Math.round(progress * 100)))} %`;
 }
 
+/**
+ * Character index in `live` where its not-yet-mirrored words begin, given the
+ * previously processed live text: the longest word prefix both share under the
+ * dedup comparison (case/punctuation-insensitive). Everything from there on is
+ * genuinely new dictation — even when the merge rebuilt the shared prefix with
+ * different case or punctuation.
+ */
+function newWordsStart(prev: string, live: string): number {
+  const prevWords = prev.trim().split(/\s+/).filter(Boolean);
+  const liveWords = live.trim().split(/\s+/).filter(Boolean);
+  let common = 0;
+  while (
+    common < prevWords.length &&
+    common < liveWords.length &&
+    comparable(prevWords[common]) === comparable(liveWords[common])
+  ) {
+    common++;
+  }
+  if (common === 0) return 0;
+  // Rejoin the shared words exactly as `live` spells them, plus the joining
+  // space, so the slice starts at the first new word.
+  return liveWords.slice(0, common).join(' ').length + 1;
+}
+
 export default function MicButton({ appendText, setText, text }: MicSlotHelpers) {
-  // Exact liveText prefix that has been mirrored into the entry so far. The
-  // merged live text is single-space word joins, which is exactly how it lands
-  // in the composer — so `lastIndexOf` can find and later replace it.
+  // Exact text the dictation has appended to the editor so far (the mirrored
+  // span). DayView's appendText concatenates raw, so this is the precise
+  // substring `swapAppendedFor` must find and replace with the final
+  // transcription — tracking `liveText` itself would drift apart as soon as a
+  // leading joining space or a dedup-rebuilt prefix is involved.
   const appendedLiveRef = useRef('');
+  // The live text the mirror last processed. New chunks are diffed against it
+  // (word-level, dedup-normalized) instead of against the appended span, which
+  // keeps mirroring alive when the merge rewrites the prefix.
+  const lastLiveRef = useRef('');
   // Whether the composer had text during this session. The cleared-entry guard
   // must not confuse "cleared after submit" with "not yet populated": the
   // first mirrored chunk lands in an update that the same render's guard
@@ -45,12 +76,25 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
   });
 
   // (Re)starts dictation from idle/error with a clean mirror state — without
-  // this a cancelled session's stale prefix would break the startsWith-based
+  // this a cancelled session's stale state would break the word-prefix
   // mirroring of the next session.
   function startDictation() {
     appendedLiveRef.current = '';
+    lastLiveRef.current = '';
     hadTextRef.current = text.trim().length > 0;
     voice.start();
+  }
+
+  /**
+   * Appends `s` at the mirror seam: DayView's `appendText` concatenates raw,
+   * so the joining space must come from here — without it chunk N+1's first
+   * word would jam onto chunk N's last („erste worteheute“). Returns the exact
+   * string appended so the mirrored span can track it byte for byte.
+   */
+  function appendWithSpace(s: string) {
+    const joined = text.trim() ? ` ${s}` : s;
+    appendText(joined);
+    return joined;
   }
 
   /**
@@ -63,12 +107,12 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
     const appended = appendedLiveRef.current;
     appendedLiveRef.current = '';
     if (!appended) {
-      if (finalText) appendText(finalText);
+      if (finalText) appendWithSpace(finalText);
       return;
     }
     const index = current.lastIndexOf(appended);
     if (index === -1) {
-      if (finalText) appendText(finalText);
+      if (finalText) appendWithSpace(finalText);
       return;
     }
     const parts = [
@@ -79,16 +123,20 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
     setText(parts.join(' '));
   }
 
-  // Mirror new live words into the entry as they arrive (append-only).
+  // Mirror new live words into the entry as they arrive (append-only). New
+  // words are diffed against the last processed live text (word-level, with
+  // the dedup comparison), so a chunk that re-renders already-mirrored words
+  // with different case/punctuation keeps mirroring instead of stalling — and
+  // the appended stream stays well-formed. Whatever the diff produced, the
+  // mirrored span tracks the exact bytes appended, so the final pass can
+  // always replace it wholesale (drift duplicates inside it are harmless).
   useEffect(() => {
     const live = voice.liveText;
     if (!live || voice.phase === 'idle') return;
-    const already = appendedLiveRef.current;
-    if (!live.startsWith(already)) return; // dedup rewrote the prefix: skip, final fixes it
-    const delta = live.slice(already.length).trim();
+    const delta = live.slice(newWordsStart(lastLiveRef.current, live)).trim();
+    lastLiveRef.current = live;
     if (!delta) return;
-    appendText(delta);
-    appendedLiveRef.current = live;
+    appendedLiveRef.current += appendWithSpace(delta);
     // text/appendText are read from the freshest render; chunks arrive seconds
     // apart, so the closure is never stale in practice.
   }, [voice.liveText, voice.phase]);
@@ -105,6 +153,7 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
     if (text === '' && hadTextRef.current && voice.phase !== 'idle') {
       hadTextRef.current = false;
       appendedLiveRef.current = '';
+      lastLiveRef.current = '';
       voice.cancel();
     }
   }, [text, voice]);

@@ -95,12 +95,14 @@ describe('MicButton', () => {
   });
 
   it('mirrors new live words into the entry via appendText', () => {
+    // appendText concatenates raw (DayView): the mirror supplies the joining
+    // space at the seam to the existing editor text.
     const helpers = { appendText: vi.fn(), setText: vi.fn(), text: 'vorhanden' };
     useVoiceMock.mockReturnValue(voiceState());
     const { rerender } = render(<MicButton {...helpers} />);
     useVoiceMock.mockReturnValue(voiceState({ phase: 'listening', liveText: 'erste worte' }));
     rerender(<MicButton {...helpers} />);
-    expect(helpers.appendText).toHaveBeenCalledWith('erste worte');
+    expect(helpers.appendText).toHaveBeenCalledWith(' erste worte');
   });
 
   it('appends only the delta when the live text grows', () => {
@@ -112,7 +114,107 @@ describe('MicButton', () => {
     helpers.appendText.mockClear();
     useVoiceMock.mockReturnValue(voiceState({ phase: 'listening', liveText: 'erste worte heute' }));
     rerender(<MicButton {...helpers} />);
-    expect(helpers.appendText).toHaveBeenCalledWith('heute');
+    expect(helpers.appendText).toHaveBeenCalledWith(' heute');
+  });
+
+  it('keeps the appended stream well-formed across chunks (raw-concatenation appendText)', () => {
+    // Mirrors DayView's appendText exactly: raw concatenation onto the current
+    // text. The mirror must supply the joining space itself — the old code
+    // trimmed the delta and produced „erste worteheute“.
+    let text = '';
+    const helpers = {
+      appendText: (s: string) => {
+        text += s;
+      },
+      setText: (s: string) => {
+        text = s;
+      },
+      get text() {
+        return text;
+      },
+    };
+    useVoiceMock.mockReturnValue(voiceState());
+    const { rerender } = render(<MicButton {...helpers} />);
+
+    useVoiceMock.mockReturnValue(voiceState({ phase: 'listening', liveText: 'erste worte' }));
+    rerender(<MicButton {...helpers} />);
+    expect(text).toBe('erste worte');
+
+    useVoiceMock.mockReturnValue(voiceState({ phase: 'listening', liveText: 'erste worte heute' }));
+    rerender(<MicButton {...helpers} />);
+    expect(text).toBe('erste worte heute');
+
+    // The final pass replaces the whole dictated span verbatim — no residue.
+    // The hook invokes the LATEST render's onFinal (optionsRef), so extract it
+    // after the transcribing rerender — its `text` sees the mirrored chunks.
+    useVoiceMock.mockReturnValue(voiceState({ phase: 'transcribing' }));
+    rerender(<MicButton {...helpers} />);
+    const onFinal = useVoiceMock.mock.calls.at(-1)![0]?.onFinal;
+    onFinal?.('Erste Worte heute.');
+    expect(text).toBe('Erste Worte heute.');
+  });
+
+  it('keeps mirroring when a chunk re-renders mirrored words with drift', () => {
+    // The dedup merge can rebuild the shared prefix with different case and
+    // punctuation: the word-level comparison must recognize the already
+    // mirrored words and append only the new ones (previously the mirror
+    // stalled for the rest of the session).
+    let text = '';
+    const helpers = {
+      appendText: (s: string) => {
+        text += s;
+      },
+      setText: (s: string) => {
+        text = s;
+      },
+      get text() {
+        return text;
+      },
+    };
+    useVoiceMock.mockReturnValue(voiceState());
+    const { rerender } = render(<MicButton {...helpers} />);
+
+    useVoiceMock.mockReturnValue(voiceState({ phase: 'listening', liveText: 'erste worte' }));
+    rerender(<MicButton {...helpers} />);
+    expect(text).toBe('erste worte');
+
+    useVoiceMock.mockReturnValue(
+      voiceState({ phase: 'listening', liveText: 'Erste worte, heute' }),
+    );
+    rerender(<MicButton {...helpers} />);
+    expect(text).toBe('erste worte heute');
+  });
+
+  it('replaces the whole dictated span when the live text re-hears a word (no residue)', () => {
+    // A re-heard word („worte“ → „welt“) breaks the word prefix: the delta
+    // re-appends from there, and the final pass must replace the WHOLE
+    // appended span — including the superseded hearing.
+    let text = '';
+    const helpers = {
+      appendText: (s: string) => {
+        text += s;
+      },
+      setText: (s: string) => {
+        text = s;
+      },
+      get text() {
+        return text;
+      },
+    };
+    useVoiceMock.mockReturnValue(voiceState());
+    const { rerender } = render(<MicButton {...helpers} />);
+
+    useVoiceMock.mockReturnValue(voiceState({ phase: 'listening', liveText: 'erste worte' }));
+    rerender(<MicButton {...helpers} />);
+    useVoiceMock.mockReturnValue(voiceState({ phase: 'listening', liveText: 'erste welt heute' }));
+    rerender(<MicButton {...helpers} />);
+    expect(text).toBe('erste worte welt heute');
+
+    useVoiceMock.mockReturnValue(voiceState({ phase: 'transcribing' }));
+    rerender(<MicButton {...helpers} />);
+    const onFinal = useVoiceMock.mock.calls.at(-1)![0]?.onFinal;
+    onFinal?.('Erste Welt heute.');
+    expect(text).toBe('Erste Welt heute.');
   });
 
   it('swaps the appended live text for the final text verbatim', () => {
@@ -125,7 +227,7 @@ describe('MicButton', () => {
     const { rerender } = render(<MicButton {...helpers} />);
     useVoiceMock.mockReturnValue(voiceState({ phase: 'listening', liveText: 'erste worte' }));
     rerender(<MicButton {...helpers} />);
-    expect(helpers.appendText).toHaveBeenCalledWith('erste worte');
+    expect(helpers.appendText).toHaveBeenCalledWith(' erste worte');
 
     // The hook calls onFinal with the raw full transcription.
     const onFinal = useVoiceMock.mock.calls.at(-1)![0]?.onFinal;
@@ -149,7 +251,7 @@ describe('MicButton', () => {
     helpers.text = 'vom user bearbeitet';
     const onFinal = useVoiceMock.mock.calls.at(-1)![0]?.onFinal;
     onFinal?.('erste worte');
-    expect(helpers.appendText).toHaveBeenCalledWith('erste worte');
+    expect(helpers.appendText).toHaveBeenCalledWith(' erste worte');
     expect(helpers.setText).not.toHaveBeenCalled();
   });
 
@@ -162,7 +264,7 @@ describe('MicButton', () => {
     const listeningVoice = voiceState({ phase: 'listening', liveText: 'erste worte' });
     useVoiceMock.mockReturnValue(listeningVoice);
     rerender(<MicButton {...helpers} />);
-    expect(helpers.appendText).toHaveBeenCalledWith('erste worte');
+    expect(helpers.appendText).toHaveBeenCalledWith(' erste worte');
 
     // The entry had text before and it was submitted, clearing the composer:
     // a non-empty → empty transition while listening ends the session.
@@ -198,7 +300,7 @@ describe('MicButton', () => {
     const helpers = { appendText: vi.fn(), setText: vi.fn(), text: 'Notiz erste worte' };
     useVoiceMock.mockReturnValue(voiceState({ phase: 'transcribing', liveText: 'erste worte' }));
     const { rerender } = render(<MicButton {...helpers} />);
-    expect(helpers.appendText).toHaveBeenCalledWith('erste worte');
+    expect(helpers.appendText).toHaveBeenCalledWith(' erste worte');
     helpers.appendText.mockClear();
 
     // Cancelled: back to idle with the old mirror state still around.
@@ -208,12 +310,12 @@ describe('MicButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Diktat starten' }));
     expect(idle.start).toHaveBeenCalled();
 
-    // A new session must mirror from zero — the stale prefix would otherwise
-    // make `startsWith` reject the whole new live text.
+    // A new session must mirror from zero — stale mirror state would
+    // otherwise swallow the new live text as already-mirrored words.
     const listening = voiceState({ phase: 'listening', liveText: 'neue worte' });
     useVoiceMock.mockReturnValue(listening);
     rerender(<MicButton {...helpers} />);
-    expect(helpers.appendText).toHaveBeenCalledWith('neue worte');
+    expect(helpers.appendText).toHaveBeenCalledWith(' neue worte');
   });
 
   it('exposes the status region as aria-live', () => {
