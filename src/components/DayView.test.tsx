@@ -222,9 +222,8 @@ it('creates a photo-only entry when a photo is picked on an entry-less day', asy
   expect(all[0].text).toBe('');
   expect(all[0].attachments).toHaveLength(1);
   expect(all[0].attachments[0].kind).toBe('photo');
-  // NOTE: blob content is not comparable here — jsdom and fake-indexeddb
-  // live in different Blob realms, so a round-tripped blob comes back
-  // structurally cloned (assert shape only, as in history.test.ts).
+  // The blob survives the database round trip with its content intact.
+  expect(await all[0].attachments[0].blob.text()).toBe('photo-bytes');
   expect(toDayKey(all[0].createdAt)).toBe(toDayKey(now.getTime()));
   // The strip shows the stored photo.
   expect(screen.getByRole('button', { name: 'Foto 1 öffnen' })).toBeTruthy();
@@ -641,7 +640,7 @@ it('restores over a diverged editor and snapshots the stored entry text', async 
   expect(field().value).toBe('A');
 });
 
-it('lists stashed attachments as informational rows without a restore button', async () => {
+it('offers stashed attachments for restore in the Verlauf panel', async () => {
   vi.useRealTimers(); // see the Verlauf-button test above
   const id = await seedEntry('Mit Anhang');
   render(<DayView day={now} onBack={vi.fn()} />);
@@ -656,8 +655,93 @@ it('lists stashed attachments as informational rows without a restore button', a
   fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
   await settleUntil(() => screen.queryByText(/Anhang \(Foto\)/) !== null);
 
-  expect(screen.getByText('Wiederherstellen folgt')).toBeTruthy();
-  expect(screen.queryByRole('button', { name: /Version vom .* wiederherstellen/ })).toBeNull();
+  // Attachment rows are actionable: a restore button, no placeholder note.
+  expect(screen.queryByText('Wiederherstellen folgt')).toBeNull();
+  expect(screen.getByRole('button', { name: /Anhang vom .* wiederherstellen/ })).toBeTruthy();
+});
+
+it('removes an attachment only after confirmation and stashes it in the vault', async () => {
+  const id = await seedEntry('Mit Fotos', [photoAttachment(), photoAttachment('image/png')]);
+  await renderEditor();
+
+  const removeButtons = screen.getAllByRole('button', { name: 'Anhang entfernen' });
+  fireEvent.click(removeButtons[1]);
+  expect(screen.getByRole('dialog', { name: 'Anhang wirklich entfernen?' })).toBeTruthy();
+  expect((await db.entries.get(id))?.attachments).toHaveLength(2);
+
+  // Abbrechen keeps everything.
+  fireEvent.click(screen.getByRole('button', { name: 'Abbrechen' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect((await db.entries.get(id))?.attachments).toHaveLength(2);
+
+  // Entfernen removes the second attachment and stashes it — stash first,
+  // then the entry update, both in the serialized write chain.
+  fireEvent.click(screen.getAllByRole('button', { name: 'Anhang entfernen' })[1]);
+  fireEvent.click(screen.getByRole('button', { name: 'Entfernen' }));
+  await drain();
+
+  const stored = await db.entries.get(id);
+  expect(stored?.attachments).toHaveLength(1);
+  expect(stored?.attachments[0].mime).toBe('image/jpeg'); // the png went away
+  const rows = await db.entryHistory.where('entryId').equals(id).toArray();
+  expect(rows).toHaveLength(1);
+  expect(rows[0].kind).toBe('attachment');
+  expect(rows[0].attachment?.kind).toBe('photo');
+  expect(rows[0].attachment?.mime).toBe('image/png');
+  expect(rows[0].attachment?.width).toBe(100);
+  expect(rows[0].attachment?.height).toBe(80);
+  // The entry itself stays — removal never auto-deletes.
+  expect(await db.entries.count()).toBe(1);
+});
+
+it('keeps a photo-only entry after its last attachment is removed (empty stays)', async () => {
+  const id = await seedEntry('', [photoAttachment()]);
+  await renderEditor();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Anhang entfernen' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Entfernen' }));
+  await drain();
+
+  const stored = await db.entries.get(id);
+  expect(stored).toBeTruthy(); // NOT auto-deleted
+  expect(stored?.text).toBe('');
+  expect(stored?.attachments).toHaveLength(0);
+});
+
+it('restores a stashed attachment from the Verlauf and deletes the vault row', async () => {
+  vi.useRealTimers(); // see the Verlauf-button test above
+  const id = await seedEntry('Mit Anhang');
+  await stashRemovedAttachment(id, {
+    kind: 'photo',
+    blob: new Blob(['fake-image'], { type: 'image/png' }),
+    mime: 'image/png',
+    width: 2048,
+    height: 1536,
+  });
+  render(<DayView day={now} onBack={vi.fn()} />);
+  await settleUntil(() => screen.queryByLabelText('Eintrag für diesen Tag') !== null);
+  await settleUntil(() => screen.queryByRole('button', { name: 'Verlauf' }) !== null);
+  fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
+  await settleUntil(
+    () => screen.queryByRole('button', { name: /Anhang vom .* wiederherstellen/ }) !== null,
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: /Anhang vom .* wiederherstellen/ }));
+
+  // The attachment is back on the entry, reconstructed with its fields.
+  await settleUntil(async () => ((await db.entries.get(id))?.attachments ?? []).length === 1);
+  const stored = await db.entries.get(id);
+  expect(stored?.attachments[0].kind).toBe('photo');
+  expect(stored?.attachments[0].mime).toBe('image/png');
+  expect(stored?.attachments[0].width).toBe(2048);
+  expect(stored?.attachments[0].height).toBe(1536);
+  // The vault is the single source of truth: the row is gone after restore.
+  const rows = await db.entryHistory.where('entryId').equals(id).toArray();
+  expect(rows.filter((row) => row.kind === 'attachment')).toHaveLength(0);
+  // The panel stays open — the restored row simply disappears from it.
+  await settleUntil(
+    () => screen.queryByRole('button', { name: /Anhang vom .* wiederherstellen/ }) === null,
+  );
 });
 
 it('closes the Verlauf panel with Escape and via Schließen', async () => {

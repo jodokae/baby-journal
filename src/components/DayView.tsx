@@ -1,12 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Attachment, type Entry, type EntryHistoryRow } from '../db';
+import {
+  db,
+  type Attachment,
+  type Entry,
+  type EntryHistoryRow,
+  type HistoryAttachment,
+} from '../db';
 import { dayKeyToNoon, dayRangeMs, toDayKey } from '../lib/dates';
 import {
   HISTORY_RETENTION_MS,
   pruneHistory,
   snapshotBeforeOverwrite,
   snapshotText,
+  stashRemovedAttachment,
 } from '../lib/history';
 import { ingestImages, type IngestError } from '../lib/ingest';
 import { SUPPORTED_ACCEPT } from '../lib/media';
@@ -47,6 +54,21 @@ interface DayViewProps {
     setText: (s: string) => void;
     text: string;
   }) => ReactNode;
+}
+
+/**
+ * Maps a stored attachment to its history-vault shape: the blob plus every
+ * descriptive field (mime, pixel dimensions) — the thumbnail and createdAt
+ * are storage details the vault does not need.
+ */
+function toHistoryAttachment(attachment: Attachment): HistoryAttachment {
+  return {
+    kind: attachment.kind,
+    blob: attachment.blob,
+    ...(attachment.mime !== undefined && { mime: attachment.mime }),
+    ...(attachment.width !== undefined && { width: attachment.width }),
+    ...(attachment.height !== undefined && { height: attachment.height }),
+  };
 }
 
 /**
@@ -98,6 +120,9 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
   const [text, setTextState] = useState(() => entry?.text ?? '');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // The attachment (by tile index) whose removal is being confirmed in the
+  // ConfirmDialog; null while no removal is pending.
+  const [confirmingRemoveIndex, setConfirmingRemoveIndex] = useState<number | null>(null);
   // Photo ingestion: true while ingestImages (plus the follow-up write) runs.
   const [ingesting, setIngesting] = useState(false);
   // Per-file errors of the LAST ingest only — not global state. The next
@@ -241,9 +266,32 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
     textRef.current = '';
     setTextState('');
     setConfirmingDelete(false);
+    setConfirmingRemoveIndex(null);
     const id = entry.id;
     // Serialized behind any in-flight save, so nothing writes to a deleted entry.
     void enqueueWrite(() => db.entries.delete(id));
+  }
+
+  /**
+   * Removes the attachment at `index` and stashes it in the history vault
+   * (48 h undo window). Serialized through the write chain with a fresh
+   * read — the liveQuery value may be stale. The entry STAYS even when its
+   * last attachment goes and the text is empty (empty-stays rule).
+   */
+  function removeAttachment(index: number) {
+    setConfirmingRemoveIndex(null);
+    const { start, end } = dayRangeMs(day);
+    void enqueueWrite(async () => {
+      const existing = await db.entries.where('createdAt').between(start, end, true, false).first();
+      if (!existing || existing.id === undefined) return;
+      const attachments = [...(existing.attachments ?? [])];
+      const [removed] = attachments.splice(index, 1);
+      if (!removed) return; // stale index — attachments changed in the meantime
+      // Stash FIRST: a crash between the two writes must never leave the
+      // photo gone without a vault row to undo the removal with.
+      await stashRemovedAttachment(existing.id, toHistoryAttachment(removed));
+      await db.entries.update(existing.id, { attachments });
+    });
   }
 
   /**
@@ -309,6 +357,34 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
     });
   }
 
+  /**
+   * Appends a stashed attachment back to the entry and DELETES its vault row
+   * — the vault is the single source of truth and empties on restore. Append
+   * runs first (a crash in between can duplicate a restore, but never loses
+   * the photo); no text snapshot is taken (adding is additive, not
+   * destructive). The panel stays open so several attachments can be
+   * restored in one go — the disappearing row is the feedback.
+   */
+  function restoreAttachmentRow(row: EntryHistoryRow) {
+    if (entry?.id === undefined) return;
+    const stashed = row.attachment;
+    const rowId = row.id;
+    if (!stashed || rowId === undefined) return;
+    const id = entry.id;
+    void enqueueWrite(async () => {
+      // Fresh read: the entry may have vanished meanwhile — then the stash
+      // is kept (nothing is restored, nothing deleted).
+      const existing = await db.entries.get(id);
+      if (!existing || existing.id === undefined) return;
+      // Reconstruct the real attachment: blob + mime/width/height from the
+      // vault row, fresh createdAt (thumbnail was never stashed).
+      await db.entries.update(id, {
+        attachments: [...(existing.attachments ?? []), { ...stashed, createdAt: Date.now() }],
+      });
+      await db.entryHistory.delete(rowId);
+    });
+  }
+
   return (
     <div className="day-editor">
       {/*
@@ -354,6 +430,7 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
           title="Eintrag löschen"
           disabled={entry === undefined}
           onClick={() => {
+            setConfirmingRemoveIndex(null);
             setConfirmingDelete(true);
           }}
         >
@@ -374,7 +451,14 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
         files only surface through the status line below until the write
         lands and the liveQuery refreshes the strip).
       */}
-      <AttachmentStrip attachments={entry?.attachments ?? []} onOpen={setOpenPhotoIndex} />
+      <AttachmentStrip
+        attachments={entry?.attachments ?? []}
+        onOpen={setOpenPhotoIndex}
+        onRemove={(index) => {
+          setConfirmingDelete(false);
+          setConfirmingRemoveIndex(index);
+        }}
+      />
       {ingesting && (
         <p className="ingest-status" role="status">
           Fotos werden verarbeitet …
@@ -397,11 +481,21 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
           onCancel={() => setConfirmingDelete(false)}
         />
       )}
+      {confirmingRemoveIndex !== null && (
+        <ConfirmDialog
+          title="Anhang wirklich entfernen?"
+          message="Er bleibt 48 Stunden im Verlauf wiederherstellbar."
+          confirmLabel="Entfernen"
+          onConfirm={() => removeAttachment(confirmingRemoveIndex)}
+          onCancel={() => setConfirmingRemoveIndex(null)}
+        />
+      )}
       {historyOpen && entry?.id !== undefined && (
         <HistoryPanel
           entryId={entry.id}
           onClose={() => setHistoryOpen(false)}
           onRestore={restoreTextRow}
+          onRestoreAttachment={restoreAttachmentRow}
         />
       )}
       {/*
@@ -455,14 +549,18 @@ interface HistoryPanelProps {
   entryId: number;
   onClose: () => void;
   onRestore: (row: EntryHistoryRow) => void;
+  /** Restores a stashed attachment (appends it to the entry, deletes the row). */
+  onRestoreAttachment: (row: EntryHistoryRow) => void;
 }
 
 /**
  * Inline Verlauf panel: the entry's text snapshots (tap to restore) and
- * stashed attachments (informational until the photos integration wires
- * their restore).
+ * stashed attachments („Wiederherstellen" appends them back to the entry and
+ * deletes the vault row). The panel only renders while the entry exists (see
+ * the render condition in DayEditor), so the restore buttons are always
+ * enabled here; rows for deleted entries can simply not be shown.
  */
-function HistoryPanel({ entryId, onClose, onRestore }: HistoryPanelProps) {
+function HistoryPanel({ entryId, onClose, onRestore, onRestoreAttachment }: HistoryPanelProps) {
   // Pure read: dexie forbids readwrite transactions inside a liveQuery
   // querier, so stale rows are filtered here and physically pruned below.
   const rows = useLiveQuery(async () => {
@@ -538,7 +636,14 @@ function HistoryPanel({ entryId, onClose, onRestore }: HistoryPanelProps) {
                   <span className="history-preview">
                     Anhang ({attachmentLabel(row.attachment?.kind)})
                   </span>
-                  <span className="history-note">Wiederherstellen folgt</span>
+                  <button
+                    type="button"
+                    className="history-attachment-restore"
+                    aria-label={`Anhang vom ${historyTimestampFormatter.format(row.at)} wiederherstellen`}
+                    onClick={() => onRestoreAttachment(row)}
+                  >
+                    Wiederherstellen
+                  </button>
                 </div>
               </li>
             ),

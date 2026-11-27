@@ -268,10 +268,21 @@ button.history-row:hover {
   overflow-wrap: anywhere;
 }
 
-.history-note {
-  color: var(--muted);
-  font-size: 0.85rem;
-  font-style: italic;
+.history-attachment-restore {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.history-attachment-restore:hover {
+  border-color: var(--accent);
 }
 
 .history-empty {
