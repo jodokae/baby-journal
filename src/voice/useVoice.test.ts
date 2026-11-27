@@ -10,8 +10,16 @@ class FakeRecorder implements VoiceRecorder {
   disposed = false;
   onChunk: ((pcm: Float32Array) => void) | null = null;
   onAutoStop: (() => void) | null = null;
-  fullPcm = new Float32Array([0.1, 0.2, 0.3]);
   startError: Error | null = null;
+
+  /**
+   * Stateful on purpose: emitted chunks accumulate into the recording buffer
+   * and are NOT reset by start() — exactly the real recorder's per-instance
+   * behaviour. This forces the owner (useVoice) to prove per-session cleanup:
+   * a reused instance would replay session 1's audio into session 2's final
+   * transcription.
+   */
+  private captured: Float32Array[] = [];
 
   async start(onChunk: (pcm: Float32Array) => void, onAutoStop: () => void) {
     if (this.startError) throw this.startError;
@@ -21,12 +29,20 @@ class FakeRecorder implements VoiceRecorder {
   }
 
   emit(chunk: Float32Array) {
+    this.captured.push(chunk);
     this.onChunk?.(chunk);
   }
 
   stop() {
     this.stopped = true;
-    return this.fullPcm;
+    const total = this.captured.reduce((sum, chunk) => sum + chunk.length, 0);
+    const pcm = new Float32Array(total);
+    let offset = 0;
+    for (const chunk of this.captured) {
+      pcm.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return pcm;
   }
 
   dispose() {
@@ -42,6 +58,8 @@ class FakeTranscriber implements VoiceTranscriber {
   fullResult = 'Endtext.';
   loadError: Error | null = null;
   fullError: Error | null = null;
+  /** PCM buffers handed to transcribeFull, in call order. */
+  fullCalls: Float32Array[] = [];
   /** Deferred control over load(). */
   private loadPromise: Promise<void> | null = null;
   private resolveLoadFn: (() => void) | null = null;
@@ -66,7 +84,8 @@ class FakeTranscriber implements VoiceTranscriber {
     return this.chunkResults.shift() ?? '';
   }
 
-  async transcribeFull() {
+  async transcribeFull(pcm: Float32Array) {
+    this.fullCalls.push(pcm);
     if (this.fullError) throw this.fullError;
     return this.fullResult;
   }
@@ -195,6 +214,8 @@ describe('useVoice', () => {
     const { result, recorder, transcriber, onFinal } = setup();
     await startToListening(result, transcriber);
 
+    // Something was captured before the screen hid (picking it up mid-session).
+    act(() => recorder.emit(new Float32Array([0.25])));
     Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
     act(() => {
       document.dispatchEvent(new Event('visibilitychange'));
@@ -210,6 +231,7 @@ describe('useVoice', () => {
     const { result, recorder, transcriber, onFinal } = setup();
     await startToListening(result, transcriber);
 
+    act(() => recorder.emit(new Float32Array([0.25])));
     act(() => recorder.onAutoStop?.());
     await waitFor(() => expect(result.current.phase).toBe('transcribing'));
     await waitFor(() => expect(onFinal).toHaveBeenCalledWith('Endtext.'));
@@ -228,5 +250,46 @@ describe('useVoice', () => {
     await waitFor(() => expect(result.current.phase).toBe('error'));
     expect(result.current.error).toMatch('Finale Transkription fehlgeschlagen');
     expect(result.current.liveText).toBe('rest vom satz');
+  });
+
+  it('starts a clean recording session after a previous dictation', async () => {
+    // Factory hands out a FRESH recorder per session — mirroring what useVoice
+    // must arrange by disposing the instance after stop(). The recorder fakes
+    // are stateful (captured audio is never reset in start()), so reusing
+    // instance #1 for session 2 would leak session 1's audio into the final
+    // transcription — this is exactly what was reported as broken before.
+    const recorders = [new FakeRecorder(), new FakeRecorder()];
+    const transcriber = new FakeTranscriber();
+    const onFinal = vi.fn();
+    let nextRecorder = 0;
+    const hook = renderHook(() =>
+      useVoice({
+        onFinal,
+        createRecorderInstance: () => recorders[nextRecorder++],
+        createTranscriberInstance: () => transcriber,
+      }),
+    );
+    await startToListening(hook.result, transcriber);
+
+    // Session 1: capture audio with a marker value that survives Float32
+    // storage exactly (0.25 = 2^-2).
+    act(() => recorders[0].emit(new Float32Array([0.25, 0.25])));
+    act(() => hook.result.current.stop());
+    await waitFor(() => expect(hook.result.current.phase).toBe('idle'));
+    expect(onFinal).toHaveBeenCalledWith('Endtext.');
+    expect(recorders[0].disposed).toBe(true);
+    const firstPcm = transcriber.fullCalls[0];
+    expect([...firstPcm]).toEqual([0.25, 0.25]);
+
+    // Session 2: a fresh recorder must be used and it must contain ONLY
+    // session 2 audio — a stale instance would prepend 0.25.
+    transcriber.fullResult = 'Zweite Folge.';
+    await startToListening(hook.result, transcriber);
+    expect(recorders[1].started).toBe(true);
+    act(() => recorders[1].emit(new Float32Array([0.75, 0.75])));
+    act(() => hook.result.current.stop());
+    await waitFor(() => expect(onFinal).toHaveBeenCalledWith('Zweite Folge.'));
+    const secondPcm = transcriber.fullCalls[1];
+    expect([...secondPcm]).toEqual([0.75, 0.75]);
   });
 });

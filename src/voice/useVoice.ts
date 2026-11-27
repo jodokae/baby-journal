@@ -222,7 +222,16 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
 
   const stop = useCallback(() => {
     if (phaseRef.current !== 'listening') return;
-    const pcm = recorderRef.current?.stop() ?? new Float32Array(0);
+    const recorder = recorderRef.current;
+    const pcm = recorder?.stop() ?? new Float32Array(0);
+    // Per-session isolation: a recorder INSTANCE owns exactly one session. A
+    // recorder keeps its buffer/state across start()/stop() cycles by design,
+    // so reusing one instance for a second dictation would replay session 1's
+    // audio (and a tripped 10-min cap would swallow all new audio). Disposing
+    // here makes the next start() build a fresh instance from the factory —
+    // and lets tests prove session cleanliness with a stateful fake.
+    recorder?.dispose();
+    recorderRef.current = null;
     queueRef.current = [];
     setPhaseRef('transcribing');
     void finalize(pcm);

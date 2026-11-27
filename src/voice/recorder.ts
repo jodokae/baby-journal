@@ -28,6 +28,9 @@ export interface VoiceRecorder {
    * Requests the microphone and starts capturing. `onChunk` receives ~4 s
    * Float32 slices (the last one may repeat up to OVERLAP_SECONDS of the
    * previous chunk); `onAutoStop` fires once when the recording cap is hit.
+   *
+   * Contract: an instance captures exactly ONE session. The owner (useVoice)
+   * disposes it right after stop(), so state must never survive a session.
    */
   start(onChunk: (pcm: Float32Array) => void, onAutoStop: () => void): Promise<void>;
   /** Stops capture and returns the complete recording as 16 kHz mono PCM. */
