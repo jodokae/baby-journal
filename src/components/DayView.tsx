@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Attachment, type Entry, type EntryHistoryRow } from '../db';
 import { dayKeyToNoon, dayRangeMs, toDayKey } from '../lib/dates';
@@ -11,6 +11,7 @@ import {
 import { ingestImages, type IngestError } from '../lib/ingest';
 import { SUPPORTED_ACCEPT } from '../lib/media';
 import { AttachmentStrip } from './AttachmentStrip';
+import { ConfirmDialog } from './ConfirmDialog';
 import { Lightbox } from './Lightbox';
 import './day-editor.css';
 
@@ -126,6 +127,11 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
   // Serializes every write for this day (saves, deletes, restores).
   const writeChainRef = useRef<Promise<void>>(Promise.resolve());
   const debounceRef = useRef<number | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Set by appendText: after the next render, keep the dictation's newest
+  // text in view. Manual typing never sets it — that would yank the
+  // viewport while the user scrolls or edits earlier text.
+  const scrollToEndRef = useRef(false);
 
   function enqueueWrite(write: () => Promise<void>) {
     const run = writeChainRef.current.then(write).catch((error) => {
@@ -191,8 +197,29 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
 
   /** Dictation helper: appends transcript text to the current content. */
   function appendText(appended: string) {
+    // Programmatic chunk: keep the growing end visible after the render.
+    scrollToEndRef.current = true;
     updateText(textRef.current + appended);
   }
+
+  // Auto-grow: the textarea is exactly as tall as its content — the PAGE
+  // scrolls, never the box itself. Runs for every text change (typing,
+  // dictation chunks, setText, restore, initial entry load). scrollHeight is
+  // always 0 in jsdom — the guard skips the height sync there (no layout),
+  // the dictation scroll below stays testable via a stubbed scrollIntoView.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (el.scrollHeight > 0) {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    }
+    if (scrollToEndRef.current) {
+      scrollToEndRef.current = false;
+      // Not implemented in jsdom — optional call keeps tests environment-free.
+      el.scrollIntoView?.({ block: 'end' });
+    }
+  }, [text]);
 
   // Flush on unmount (back button): nothing typed is lost even when the
   // debounce has not fired yet. Fire-and-forget — the write chain serializes
@@ -284,22 +311,64 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
 
   return (
     <div className="day-editor">
+      {/*
+        Pinned action bar, directly below the nav: Verlauf + photo picker +
+        dictation slot on the left, the trash button on the right. Sticks
+        under the (safe-area) top edge while the page scrolls.
+      */}
+      <div className="day-action-bar">
+        <div className="day-action-bar-left">
+          {historyCount ? (
+            <button
+              type="button"
+              className="icon-action"
+              aria-label="Verlauf"
+              title="Verlauf"
+              onClick={() => setHistoryOpen(true)}
+            >
+              <span aria-hidden="true">🕘</span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="icon-action"
+            aria-label="Foto hinzufügen"
+            title="Foto hinzufügen"
+            disabled={ingesting}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <span aria-hidden="true">📎</span>
+          </button>
+          {/*
+            Dictation slot — the contract is documented on DayViewProps.micSlot:
+            appendText appends the transcript, setText replaces the live
+            dictated text with the final transcription, both reschedule the
+            auto-save like a user edit.
+          */}
+          {micSlot?.({ appendText, setText: updateText, text })}
+        </div>
+        <button
+          type="button"
+          className="icon-action danger"
+          aria-label="Eintrag löschen"
+          title="Eintrag löschen"
+          disabled={entry === undefined}
+          onClick={() => {
+            setConfirmingDelete(true);
+          }}
+        >
+          <span aria-hidden="true">🗑️</span>
+        </button>
+      </div>
       <textarea
+        ref={textareaRef}
         value={text}
         onChange={(e) => updateText(e.target.value)}
         placeholder="Eintrag für diesen Tag …"
         aria-label="Eintrag für diesen Tag"
         maxLength={MAX_TEXT_LENGTH}
-        rows={3}
         autoFocus
       />
-      {/*
-        Dictation slot — the contract is documented on DayViewProps.micSlot:
-        rendered between the textarea and the action row; appendText appends
-        the transcript, setText replaces the live dictated text with the final
-        transcription, both reschedule the auto-save like a user edit.
-      */}
-      {micSlot?.({ appendText, setText: updateText, text })}
       {/*
         Current attachments of the entry (read-only while ingesting: pending
         files only surface through the status line below until the write
@@ -320,43 +389,13 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
           ))}
         </ul>
       )}
-      {confirmingDelete ? (
-        <div className="delete-confirm">
-          <p>Wirklich löschen?</p>
-          <div className="day-actions">
-            <button type="button" className="danger" onClick={deleteEntry}>
-              Ja, löschen
-            </button>
-            <button type="button" onClick={() => setConfirmingDelete(false)}>
-              Abbrechen
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="day-actions">
-          <button
-            type="button"
-            aria-label="Foto hinzufügen"
-            title="Foto hinzufügen"
-            disabled={ingesting}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <span aria-hidden="true">📎</span>
-          </button>
-          {historyCount ? (
-            <button type="button" onClick={() => setHistoryOpen(true)}>
-              Verlauf
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="danger"
-            onClick={() => setConfirmingDelete(true)}
-            disabled={entry === undefined}
-          >
-            Löschen
-          </button>
-        </div>
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Eintrag wirklich löschen?"
+          confirmLabel="Löschen"
+          onConfirm={deleteEntry}
+          onCancel={() => setConfirmingDelete(false)}
+        />
       )}
       {historyOpen && entry?.id !== undefined && (
         <HistoryPanel

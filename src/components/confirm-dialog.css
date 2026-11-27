@@ -1,0 +1,55 @@
+/* Confirm dialog for destructive actions (entry delete, attachment removal).
+   Per-component stylesheet (main.css is frozen); reuses the app's CSS
+   variables from main.css, so light/dark via prefers-color-scheme works. */
+
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 1rem;
+}
+
+.confirm-dialog {
+  width: min(20rem, 100%);
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.confirm-title {
+  margin: 0 0 0.75rem;
+  font-weight: 600;
+}
+
+.confirm-message {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.confirm-actions button {
+  flex: 1;
+  min-height: 44px;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.confirm-actions .danger {
+  color: var(--danger);
+}

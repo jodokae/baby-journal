@@ -8,7 +8,7 @@
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  margin-bottom: 1rem;
+  margin-bottom: 0.5rem;
 }
 
 .back-button {
@@ -42,6 +42,68 @@
   white-space: nowrap;
 }
 
+/* --- Pinned action bar (directly below the nav) --- */
+
+.day-action-bar {
+  position: sticky;
+  top: env(safe-area-inset-top);
+  z-index: 10;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  /* Bleed across the .app padding so content scrolls under a full-width bar. */
+  margin: 0 -1.25rem;
+  padding: 0.5rem calc(1.25rem + env(safe-area-inset-right)) 0.5rem
+    calc(1.25rem + env(safe-area-inset-left));
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.day-action-bar-left {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.icon-action:hover {
+  border-color: var(--muted);
+}
+
+.icon-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.icon-action.danger {
+  color: var(--danger);
+}
+
+/* The mic slot keeps its main.css column layout, but loses the old composer
+   flex-basis (it would stretch across the bar). */
+.day-action-bar .mic-slot {
+  flex-basis: auto;
+  margin-top: 0;
+}
+
 /* --- Always-editable editor --- */
 
 .day-editor {
@@ -52,7 +114,11 @@
 
 .day-editor textarea {
   width: 100%;
-  min-height: 8rem;
+  /* Fill the first viewport minus nav + action bar; auto-grow (in DayView)
+     then keeps the box exactly as tall as its content — the PAGE scrolls,
+     never the textarea itself. svh keeps iOS dynamic chrome honest. */
+  min-height: calc(100vh - 10rem);
+  min-height: calc(100svh - 10rem);
   padding: 0.7rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 0.75rem;
@@ -62,6 +128,7 @@
   font-size: 1rem;
   line-height: 1.5;
   resize: none;
+  overflow: hidden;
 }
 
 .day-actions {

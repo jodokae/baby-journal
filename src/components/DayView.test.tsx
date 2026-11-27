@@ -360,27 +360,101 @@ it('edits future days too and stores the entry at local noon', async () => {
   expect(all[0].createdAt).toBe(noonOf(tomorrow));
 });
 
-it('deletes the entry only after confirmation', async () => {
+it('deletes the entry only after confirmation via the dialog', async () => {
   await seedEntry('Zum Löschen');
   await renderEditor();
   expect(field().value).toBe('Zum Löschen');
 
-  fireEvent.click(screen.getByRole('button', { name: 'Löschen' }));
-  expect(screen.getByText('Wirklich löschen?')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Eintrag löschen' }));
+  expect(screen.getByRole('dialog', { name: 'Eintrag wirklich löschen?' })).toBeTruthy();
   expect(await db.entries.count()).toBe(1);
 
   // Abbrechen keeps the entry.
   fireEvent.click(screen.getByRole('button', { name: 'Abbrechen' }));
-  expect(screen.queryByText('Wirklich löschen?')).toBeNull();
+  expect(screen.queryByRole('dialog')).toBeNull();
   expect(await db.entries.count()).toBe(1);
 
-  // Ja, löschen removes it; the editor stays, empty and ready for a new entry.
+  // Löschen removes it; the editor stays, empty and ready for a new entry.
+  fireEvent.click(screen.getByRole('button', { name: 'Eintrag löschen' }));
   fireEvent.click(screen.getByRole('button', { name: 'Löschen' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Ja, löschen' }));
   await drain();
   expect(await db.entries.count()).toBe(0);
   await drain();
   expect(field().value).toBe('');
+});
+
+it('cancels the delete dialog via Escape', async () => {
+  await seedEntry('Bleibt');
+  await renderEditor();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Eintrag löschen' }));
+  fireEvent.keyDown(window, { key: 'Escape' });
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(await db.entries.count()).toBe(1);
+});
+
+it('pins the action bar below the nav with Verlauf, picker and mic slot', async () => {
+  await seedEntry('Mit Bar');
+  const { container } = await renderEditor(
+    <DayView
+      day={now}
+      onBack={vi.fn()}
+      micSlot={({ text }) => <button type="button">Mic ({text.length})</button>}
+    />,
+  );
+
+  const bar = container.querySelector('.day-action-bar');
+  expect(bar).toBeTruthy();
+  // The dictation slot renders INSIDE the pinned bar, next to the buttons —
+  // with the seeded entry's text ('Mit Bar') as its `text` helper.
+  expect(bar?.textContent).toContain('Mic (7)');
+  expect(screen.getByRole('button', { name: 'Foto hinzufügen' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Eintrag löschen' })).toBeTruthy();
+});
+
+it('lets the textarea grow with its content and guards the jsdom autosize', async () => {
+  const { container } = await renderEditor();
+  const textarea = field();
+
+  // No fixed rows anymore — the box grows via the autosize effect.
+  expect(container.querySelector('textarea[rows]')).toBeNull();
+  // jsdom has no layout (scrollHeight 0): the guard skips the height sync.
+  fireEvent.change(textarea, { target: { value: 'Wächst mit' } });
+  expect(textarea.style.height).toBe('');
+});
+
+it('scrolls the dictation end into view on programmatic appends only', async () => {
+  const scrollIntoView = vi.fn();
+  const prototype = HTMLElement.prototype as unknown as {
+    scrollIntoView?: () => void;
+  };
+  const original = prototype.scrollIntoView;
+  prototype.scrollIntoView = scrollIntoView;
+  try {
+    await renderEditor(
+      <DayView
+        day={now}
+        onBack={vi.fn()}
+        micSlot={({ appendText }) => (
+          <button type="button" onClick={() => appendText(' Diktat')}>
+            Diktieren
+          </button>
+        )}
+      />,
+    );
+    scrollIntoView.mockClear();
+
+    // A dictation chunk keeps the newest text visible…
+    fireEvent.click(screen.getByRole('button', { name: 'Diktieren' }));
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'end' });
+
+    // …manual typing never yanks the viewport.
+    scrollIntoView.mockClear();
+    fireEvent.change(field(), { target: { value: 'Getippt' } });
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  } finally {
+    prototype.scrollIntoView = original;
+  }
 });
 
 it('exposes appendText and setText to the micSlot render prop and auto-saves both', async () => {
@@ -530,7 +604,7 @@ it('restores a text snapshot and snapshots the current text first', async () => 
   fireEvent.click(screen.getByRole('button', { name: /Version vom .* wiederherstellen/ }));
 
   await settleUntil(async () => (await db.entries.get(id))?.text === 'Alter Stand');
-  expect(screen.queryByLabelText('Verlauf')).toBeNull(); // panel closed after restore
+  expect(screen.queryByRole('region', { name: 'Verlauf' })).toBeNull(); // panel closed after restore
   expect(field().value).toBe('Alter Stand');
   // Restoring is itself undoable: the pre-restore text was snapshotted first.
   const history = await db.entryHistory.where('entryId').equals(id).toArray();
@@ -594,13 +668,13 @@ it('closes the Verlauf panel with Escape and via Schließen', async () => {
   await settleUntil(() => screen.queryByRole('button', { name: 'Verlauf' }) !== null);
 
   fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
-  await settleUntil(() => screen.queryByLabelText('Verlauf') !== null);
+  await settleUntil(() => screen.queryByRole('region', { name: 'Verlauf' }) !== null);
 
   fireEvent.keyDown(window, { key: 'Escape' });
-  expect(screen.queryByLabelText('Verlauf')).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Verlauf' })).toBeNull();
 
   fireEvent.click(screen.getByRole('button', { name: 'Verlauf' }));
-  await settleUntil(() => screen.queryByLabelText('Verlauf') !== null);
+  await settleUntil(() => screen.queryByRole('region', { name: 'Verlauf' }) !== null);
   fireEvent.click(screen.getByRole('button', { name: 'Verlauf schließen' }));
-  expect(screen.queryByLabelText('Verlauf')).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Verlauf' })).toBeNull();
 });
