@@ -11,6 +11,9 @@ class FakeRecorder implements VoiceRecorder {
   onChunk: ((pcm: Float32Array) => void) | null = null;
   onAutoStop: (() => void) | null = null;
   startError: Error | null = null;
+  /** When true, start() hangs until rejectDeferredStart() — late rejections. */
+  deferredStart = false;
+  private rejectStartFn: ((err: Error) => void) | null = null;
 
   /**
    * Stateful on purpose: emitted chunks accumulate into the recording buffer
@@ -22,10 +25,20 @@ class FakeRecorder implements VoiceRecorder {
   private captured: Float32Array[] = [];
 
   async start(onChunk: (pcm: Float32Array) => void, onAutoStop: () => void) {
+    if (this.deferredStart) {
+      await new Promise<void>((_, reject) => {
+        this.rejectStartFn = reject;
+      });
+    }
     if (this.startError) throw this.startError;
     this.started = true;
     this.onChunk = onChunk;
     this.onAutoStop = onAutoStop;
+  }
+
+  /** Releases a hanging start() with a rejection (deferredStart must be set). */
+  rejectDeferredStart(err: Error) {
+    this.rejectStartFn?.(err);
   }
 
   emit(chunk: Float32Array) {
@@ -272,6 +285,44 @@ describe('useVoice', () => {
     // The failed instance is dropped: the retry must start a fresh one.
     act(() => hook.result.current.start());
     await waitFor(() => expect(recorders[1].started).toBe(true));
+  });
+
+  it('a stale failed start disposes only its own recorder (newer session keeps running)', async () => {
+    // Session A's start() rejects AFTER the user cancelled and restarted:
+    // the catch must dispose A, never re-fetch the ref (session B's recorder)
+    // — nulling it would kill the live session.
+    const recorders = [new FakeRecorder(), new FakeRecorder()];
+    const transcriber = new FakeTranscriber();
+    let next = 0;
+    const hook = renderHook(() =>
+      useVoice({
+        createRecorderInstance: () => recorders[next++],
+        createTranscriberInstance: () => transcriber,
+      }),
+    );
+
+    // Session A: start hangs (permission prompt pending).
+    recorders[0].deferredStart = true;
+    act(() => hook.result.current.start());
+    await waitFor(() => expect(hook.result.current.phase).toBe('loading'));
+
+    // The user backs out and re-taps: cancel disposes A, session B records.
+    act(() => hook.result.current.cancel());
+    transcriber.chunkResults = ['neue session'];
+    await startToListening(hook.result, transcriber);
+    expect(recorders[1].started).toBe(true);
+
+    // NOW A's start rejects (e.g. a worklet failure on the stale session).
+    recorders[0].rejectDeferredStart(new Error('late boom'));
+    await waitFor(() => expect(recorders[0].disposed).toBe(true));
+    // B survives untouched, in listening, without a spurious error.
+    expect(recorders[1].disposed).toBe(false);
+    expect(hook.result.current.phase).toBe('listening');
+    expect(hook.result.current.error).toBeNull();
+
+    // B still records end to end.
+    act(() => recorders[1].emit(new Float32Array(64_000)));
+    await waitFor(() => expect(hook.result.current.liveText).toBe('neue session'));
   });
 
   it('abort mid-load disposes recorder and transcriber', async () => {

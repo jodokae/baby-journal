@@ -209,8 +209,12 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     void (async () => {
       // 1. Microphone first — recorder.start() calls getUserMedia as its very
       // first statement and must run inside the tap's user-gesture chain (iOS).
+      // The INSTANCE is captured here: the catch below must dispose its own
+      // session's recorder, never re-fetch the ref — by the time a slow start
+      // rejects, the ref may already belong to a newer session.
+      const rec = recorder();
       try {
-        await recorder().start(
+        await rec.start(
           (pcm) => {
             if (sessionRef.current !== session) return;
             queueRef.current.push(pcm);
@@ -227,9 +231,11 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
         // A start() throw can land AFTER the permission grant (worklet or
         // context failure): dispose so the live microphone is released and
         // a retry builds a fresh instance — mirroring the load-failure
-        // branch below.
-        recorderRef.current?.dispose();
-        recorderRef.current = null;
+        // branch below. But a STALE rejection (cancel + restart happened
+        // meanwhile) must never kill the newer session's recorder: dispose
+        // only our instance and release the ref only if it still holds it.
+        rec.dispose();
+        if (recorderRef.current === rec) recorderRef.current = null;
         if (sessionRef.current !== session) return;
         setPhaseRef('error');
         setError(MIC_ERROR);
