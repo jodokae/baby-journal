@@ -143,3 +143,93 @@ body {
   background: var(--accent);
   color: var(--accent-text);
 }
+
+/* --- Calendar view --- */
+
+.calendar-header {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.calendar-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 1.25rem;
+  text-align: center;
+}
+
+.calendar-header button {
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.calendar-header button:hover {
+  background: var(--surface);
+}
+
+.calendar-header .today-button {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* react-day-picker overrides: keep the macOS-Calendar-like clean look and map
+   the library colors onto the app's CSS variables so light and dark both work. */
+.calendar .rdp-root {
+  --rdp-accent-color: var(--accent);
+  --rdp-accent-background-color: var(--accent);
+  --rdp-today-color: var(--accent);
+  --rdp-day-height: 2.5rem;
+  --rdp-day-width: 2.5rem;
+  --rdp-day_button-height: 2.25rem;
+  --rdp-day_button-width: 2.25rem;
+  --rdp-selected-border: none;
+  --rdp-weekday-opacity: 0.7;
+}
+
+/* The tab header above shows the month title; hide the library's own caption. */
+.calendar .rdp-month_caption {
+  display: none;
+}
+
+.calendar .rdp-day {
+  position: relative;
+}
+
+.calendar .rdp-today:not(.rdp-outside) .rdp-day_button {
+  font-weight: 600;
+}
+
+.calendar .rdp-selected .rdp-day_button {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.calendar .rdp-day.has-entries::after {
+  content: '';
+  position: absolute;
+  bottom: 0.15rem;
+  left: 50%;
+  width: 0.3rem;
+  height: 0.3rem;
+  margin-left: -0.15rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.day-entries {
+  margin-top: 1rem;
+}
+
+.day-entries h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: var(--muted);
+}

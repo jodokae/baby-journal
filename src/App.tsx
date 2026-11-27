@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Entry } from './db';
+import CalendarView from './components/CalendarView';
 import Composer from './components/Composer';
 
 const dateFormatter = new Intl.DateTimeFormat('de-DE', {
@@ -65,7 +66,9 @@ export default function App() {
             )}
           </section>
         </>
-      ) : null}
+      ) : (
+        <CalendarView />
+      )}
     </main>
   );
 }
