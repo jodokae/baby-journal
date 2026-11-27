@@ -178,6 +178,36 @@ describe('useVoice', () => {
     expect(result.current.phase).toBe('listening');
   });
 
+  it('surfaces three consecutive empty chunk results as an error', async () => {
+    // The round-2 report: mic active, „Ich höre zu …", nothing written, no
+    // console output. Whatever upstream break produces them, empty results
+    // must never stay invisible forever.
+    const { result, recorder, transcriber } = setup();
+    await startToListening(result, transcriber);
+
+    transcriber.chunkResults = ['', '', ''];
+    act(() => recorder.emit(new Float32Array(64_000)));
+    act(() => recorder.emit(new Float32Array(64_000)));
+    act(() => recorder.emit(new Float32Array(64_000)));
+    await waitFor(() => expect(result.current.phase).toBe('error'));
+    expect(result.current.error).toMatch('keine verwertbaren Audiodaten');
+    // The recorder is released so the mic indicator goes dark and a retry
+    // builds a fresh instance.
+    expect(recorder.disposed).toBe(true);
+  });
+
+  it('errors only after three consecutive empty results (non-empty resets the streak)', async () => {
+    const { result, recorder, transcriber } = setup();
+    await startToListening(result, transcriber);
+
+    const chunkSpy = vi.spyOn(transcriber, 'transcribeChunk');
+    transcriber.chunkResults = ['', '', 'text', '', ''];
+    for (let i = 0; i < 5; i++) act(() => recorder.emit(new Float32Array(64_000)));
+    await waitFor(() => expect(chunkSpy).toHaveBeenCalledTimes(5));
+    expect(result.current.phase).toBe('listening');
+    expect(result.current.liveText).toBe('text');
+  });
+
   it('shows a German error and supports retry when loading fails', async () => {
     const { result, transcriber } = setup();
     transcriber.loadError = new Error('offline');
