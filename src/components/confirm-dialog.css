@@ -53,3 +53,11 @@
 .confirm-actions .danger {
   color: var(--danger);
 }
+
+/* Non-destructive confirming action (tone="primary"): accent-filled like the
+   calendar's selected day, so the confirm reads as the app's positive action. */
+.confirm-actions .primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}

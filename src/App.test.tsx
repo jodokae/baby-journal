@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, expect, it, vi } from 'vitest';
 import App from './App';
 import { db } from './db';
 import { toDayKey } from './lib/dates';
@@ -22,6 +22,11 @@ function todayCell(container: HTMLElement): HTMLElement {
   const cell = container.querySelector(`td[data-day="${toDayKey(now.getTime())}"] button`);
   expect(cell).toBeTruthy();
   return cell as HTMLElement;
+}
+
+function mockShare(share: unknown, canShare: unknown) {
+  Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+  Object.defineProperty(navigator, 'canShare', { value: canShare, configurable: true });
 }
 
 it('has no tab navigation', () => {
@@ -125,7 +130,17 @@ it('opens the Daten & Backup view from the header button and returns', async () 
   expect(container.querySelector('td[data-day]')).toBeTruthy();
 });
 
-it('shows the daily export banner with an entry and hides it for today after dismissing', async () => {
+it('shows no backup dialog when there are no entries', async () => {
+  localStorage.clear();
+  await db.entries.clear();
+  const { container } = render(<App />);
+  // Once the calendar has rendered, the day-logic must keep the dialog shut.
+  await waitFor(() => expect(container.querySelector('td[data-day]')).toBeTruthy());
+  expect(screen.queryByRole('dialog', { name: 'Backup fällig' })).toBeNull();
+  localStorage.clear();
+});
+
+it('shows the daily backup dialog with an entry and dismisses it for today', async () => {
   localStorage.clear();
   await db.entries.clear();
   await db.entries.add({
@@ -135,14 +150,113 @@ it('shows the daily export banner with an entry and hides it for today after dis
     attachments: [],
   });
 
-  render(<App />);
-  const banner = await screen.findByText('Backup fällig – Einträge sichern');
-  expect(banner.closest('.backup-banner')).toBeTruthy();
+  const first = render(<App />);
+  expect(await screen.findByRole('dialog', { name: 'Backup fällig' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Export' })).toBeTruthy();
 
   fireEvent.click(screen.getByRole('button', { name: 'Später' }));
-  expect(screen.queryByText('Backup fällig – Einträge sichern')).toBeNull();
+  expect(screen.queryByRole('dialog', { name: 'Backup fällig' })).toBeNull();
 
+  // The dismissal lasts for the rest of the day: a fresh app open with the
+  // same entries stays quiet.
+  first.unmount();
+  const second = render(<App />);
+  await waitFor(() => expect(second.container.querySelector('td.has-entries')).toBeTruthy());
+  expect(screen.queryByRole('dialog', { name: 'Backup fällig' })).toBeNull();
+
+  await db.entries.clear();
+  localStorage.clear();
+});
+
+it('exports from the dialog, closes it and stays hidden for the rest of the day', async () => {
+  localStorage.clear();
+  await db.entries.clear();
+  await db.entries.add({
+    createdAt: Date.now(),
+    type: 'note',
+    text: 'Banner-Test',
+    attachments: [],
+  });
+  const share = vi.fn().mockResolvedValue(undefined);
+  mockShare(
+    share,
+    vi.fn(() => true),
+  );
+
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Export' }));
+
+  await waitFor(() => expect(share).toHaveBeenCalled());
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Backup fällig' })).toBeNull());
+
+  // Exported today: a fresh app open with entries shows no dialog.
+  const fresh = render(<App />);
+  await waitFor(() => expect(fresh.container.querySelector('td.has-entries')).toBeTruthy());
+  expect(screen.queryByRole('dialog', { name: 'Backup fällig' })).toBeNull();
+
+  mockShare(undefined, undefined);
+  await db.entries.clear();
+  localStorage.clear();
+});
+
+it('shows „Exportiere …" while the export runs and keeps the dialog open', async () => {
+  localStorage.clear();
+  await db.entries.clear();
+  await db.entries.add({
+    createdAt: Date.now(),
+    type: 'note',
+    text: 'Banner-Test',
+    attachments: [],
+  });
+  let resolveShare: () => void = () => {};
+  const share = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveShare = resolve;
+      }),
+  );
+  mockShare(
+    share,
+    vi.fn(() => true),
+  );
+
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Export' }));
+
+  expect(screen.getByRole('button', { name: 'Exportiere …' })).toBeTruthy();
+  expect(screen.getByRole('dialog', { name: 'Backup fällig' })).toBeTruthy();
+
+  // Only resolve once the export actually reached the share sheet.
+  await waitFor(() => expect(share).toHaveBeenCalled());
+  resolveShare();
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Backup fällig' })).toBeNull());
+
+  mockShare(undefined, undefined);
+  await db.entries.clear();
+  localStorage.clear();
+});
+
+it('keeps the dialog open with the German error when the export fails', async () => {
+  localStorage.clear();
+  await db.entries.clear();
+  await db.entries.add({
+    createdAt: Date.now(),
+    type: 'note',
+    text: 'Banner-Test',
+    attachments: [],
+  });
+  mockShare(
+    vi.fn().mockRejectedValue(new Error('nope')),
+    vi.fn(() => true),
+  );
+
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Export' }));
+
+  expect(await screen.findByText('Export fehlgeschlagen – bitte erneut versuchen.')).toBeTruthy();
+  expect(screen.getByRole('dialog', { name: 'Backup fällig' })).toBeTruthy();
+
+  mockShare(undefined, undefined);
   await db.entries.clear();
   localStorage.clear();
 });

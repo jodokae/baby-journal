@@ -15,13 +15,9 @@ const dateTimeFormatter = new Intl.DateTimeFormat('de-DE', {
   dateStyle: 'medium',
   timeStyle: 'short',
 });
-const mbFormatter = new Intl.NumberFormat('de-DE', {
-  minimumFractionDigits: 1,
-  maximumFractionDigits: 1,
-});
 
-const MB = 1024 * 1024;
 const IMPORT_FAILED_MESSAGE = 'Import fehlgeschlagen – bitte erneut versuchen.';
+const PERSISTENCE_HINT = 'Schützt deine Daten davor, dass iOS den App-Speicher räumt.';
 
 interface BackupViewProps {
   /** Called by the back button to return to the calendar. */
@@ -38,9 +34,10 @@ function formatCount(count: number): string {
 }
 
 /**
- * Full-screen "Daten & Backup" view: last export, storage usage/persistence
- * plus manual export and import/restore. Import replaces all entries only
- * after an inline confirmation; nothing is touched while the file is invalid.
+ * Full-screen "Daten & Backup" view: last export, a persistence request while
+ * persistence is missing, plus manual export and import/restore. Import
+ * replaces all entries only after an inline confirmation; nothing is touched
+ * while the file is invalid.
  */
 export default function BackupView({ onBack }: BackupViewProps) {
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
@@ -57,7 +54,7 @@ export default function BackupView({ onBack }: BackupViewProps) {
         if (!cancelled) setStorageInfo(info);
       })
       .catch(() => {
-        // Unsupported or unreadable: keep the storage section hidden.
+        // Unsupported or unreadable: keep the persistence row hidden.
       });
     return () => {
       cancelled = true;
@@ -120,9 +117,10 @@ export default function BackupView({ onBack }: BackupViewProps) {
     setWorking(true);
     try {
       await requestPersistentStorage();
+      // A granted request flips `persisted`, so the row hides itself silently.
       setStorageInfo(await getStorageInfo());
     } catch {
-      // Unsupported: the section keeps showing the request button.
+      // Unsupported: the row keeps showing the request button.
     } finally {
       setWorking(false);
     }
@@ -142,27 +140,25 @@ export default function BackupView({ onBack }: BackupViewProps) {
         <p>{lastBackup ? dateTimeFormatter.format(lastBackup) : 'noch kein Backup'}</p>
       </section>
 
-      {storageInfo && (
+      {/* Persistence row: only while persistence is missing and supported —
+          once persisted (or on unsupported browsers) it stays hidden. */}
+      {storageInfo && !storageInfo.persisted && (
         <section className="backup-section">
           <h3>Speicher</h3>
-          {storageInfo.usageBytes !== undefined && storageInfo.quotaBytes !== undefined && (
-            <p>
-              Speicherverbrauch: {mbFormatter.format(storageInfo.usageBytes / MB)} von{' '}
-              {mbFormatter.format(storageInfo.quotaBytes / MB)} MB
-            </p>
-          )}
-          {storageInfo.persisted ? (
-            <p>Speicher ist beständig ✓</p>
-          ) : (
-            <button type="button" onClick={handleRequestPersistence} disabled={working}>
-              Beständigen Speicher anfordern
-            </button>
-          )}
+          <p className="backup-hint">{PERSISTENCE_HINT}</p>
+          <button
+            type="button"
+            className="backup-persist"
+            onClick={handleRequestPersistence}
+            disabled={working}
+          >
+            Persistenten Speicher anfordern
+          </button>
         </section>
       )}
 
       <div className="backup-actions">
-        <button type="button" onClick={handleExport} disabled={working}>
+        <button type="button" className="primary" onClick={handleExport} disabled={working}>
           Backup jetzt erstellen
         </button>
         <button type="button" onClick={() => fileInputRef.current?.click()} disabled={working}>

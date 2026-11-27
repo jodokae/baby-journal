@@ -99,4 +99,61 @@ body {
 /* Calendar styles live in src/components/calendar.css; day-view styles live
    in src/components/day-editor.css (imported by DayView). */
 
-/* --- Backup banner + backup view --- */
+/* --- Backup view --- */
+
+.backup-section {
+  margin: 0.75rem 0;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.backup-section h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.backup-section p {
+  margin: 0;
+}
+
+.backup-hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* The manual export/import actions: large full-width rows in the app's
+   button language (outlined, .primary accent-filled), dark mode via the
+   shared CSS variables. */
+.backup-actions {
+  display: grid;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.backup-actions button,
+.backup-persist {
+  width: 100%;
+  min-height: 48px;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.backup-actions .primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.backup-actions button:disabled,
+.backup-persist:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

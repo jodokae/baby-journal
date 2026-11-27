@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
 import BackupView from './components/BackupView';
 import CalendarView from './components/CalendarView';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import DayView from './components/DayView';
 import MicButton from './components/MicButton';
 import { dayKeyToNoon, toDayKey } from './lib/dates';
 import { pruneHistory } from './lib/history';
 import { useDailyBackupBanner } from './lib/useDailyBackupBanner';
+
+/** Hint shown in the daily backup dialog while no export is running. */
+const BACKUP_DUE_MESSAGE =
+  'Dein Tagebuch liegt nur auf diesem Gerät – sichere es als Datei in der Dateien-App.';
 
 /**
  * Session-scoped persistence of the open day: a page reload (dev-server dep
@@ -25,7 +30,7 @@ function restoreSelectedDay(): Date | null {
 /**
  * Two screens, a plain state swap: the calendar (default) and the full-screen
  * view of one day. Month and selected day live here so they survive going back.
- * The "Daten & Backup" view and the daily export banner are also calendar-level.
+ * The "Daten & Backup" view and the daily backup dialog are also calendar-level.
  */
 export default function App() {
   const [month, setMonth] = useState(() => new Date());
@@ -70,34 +75,19 @@ export default function App() {
             </div>
           </header>
           {banner.visible && (
-            <div className="backup-banner" role="status">
-              <div className="backup-banner-main">
-                <p>Backup fällig – Einträge sichern</p>
-                <div className="backup-banner-actions">
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={banner.exportNow}
-                    disabled={banner.exporting}
-                  >
-                    Export
-                  </button>
-                  <button
-                    type="button"
-                    className="dismiss"
-                    aria-label="Später"
-                    onClick={banner.dismiss}
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-              {banner.error && (
-                <p className="backup-banner-error" role="alert">
-                  {banner.error}
-                </p>
-              )}
-            </div>
+            <ConfirmDialog
+              title="Backup fällig"
+              /* An export error replaces the hint inside the open dialog. */
+              message={banner.error ?? BACKUP_DUE_MESSAGE}
+              confirmLabel={banner.exporting ? 'Exportiere …' : 'Export'}
+              cancelLabel="Später"
+              tone="primary"
+              onConfirm={() => {
+                // The hook no-ops while an export is running.
+                void banner.exportNow();
+              }}
+              onCancel={banner.dismiss}
+            />
           )}
           <CalendarView
             month={month}
