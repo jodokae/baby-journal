@@ -64,9 +64,14 @@ export default function CalendarView({
         month={month}
         onMonthChange={onMonthChange}
         selected={selectedDay ?? undefined}
-        onSelect={(day) => {
-          if (day) onDaySelect(day);
-        }}
+        // Selection is purely the visual highlight, driven by the prop:
+        // providing onSelect keeps DayPicker controlled, so its internal
+        // single-mode toggle can never clear or drift the highlight.
+        onSelect={() => {}}
+        // Navigation fires on every tap — including a second tap on the
+        // already-selected day, which must reopen the day view. (onSelect
+        // would only see an `undefined` toggle-off there and drop the tap.)
+        onDayClick={(day) => onDaySelect(day)}
         fixedWeeks
         showOutsideDays={false}
         hideNavigation

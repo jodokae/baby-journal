@@ -37,6 +37,25 @@ it('opens the tapped day full screen and returns to the calendar', async () => {
   expect(container.querySelector(`td[data-day="${toDayKey(now.getTime())}"]`)).toBeTruthy();
 });
 
+it('reopens the day view when the still-selected day is tapped again', async () => {
+  const { container } = render(<App />);
+
+  fireEvent.click(todayCell(container));
+  expect(await screen.findByRole('button', { name: '‹ Zurück' })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole('button', { name: '‹ Zurück' }));
+  expect(await screen.findByRole('heading', { name: '🍼 Baby-Tagebuch' })).toBeTruthy();
+  // The day is still selected after returning to the calendar...
+  expect(container.querySelector('td.rdp-selected')?.getAttribute('data-day')).toBe(
+    toDayKey(now.getTime()),
+  );
+
+  // ...and tapping the SAME day again reopens the day view.
+  fireEvent.click(todayCell(container));
+  expect(await screen.findByRole('button', { name: '‹ Zurück' })).toBeTruthy();
+  expect(screen.getByRole('heading', { level: 2 }).textContent).toBe(dayFormatter.format(now));
+});
+
 it('keeps the month and the selected day when returning from the day view', () => {
   const { container } = render(<App />);
   const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);

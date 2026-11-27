@@ -78,6 +78,25 @@ it('calls onDaySelect with the tapped day', async () => {
   expect(toDayKey(onDaySelect.mock.calls[0][0].getTime())).toBe(toDayKey(at(5)));
 });
 
+it('re-fires onDaySelect when the already-selected day is tapped again', () => {
+  const onDaySelect = vi.fn();
+  const { container } = render(
+    <CalendarView
+      month={new Date()}
+      onMonthChange={vi.fn()}
+      selectedDay={new Date(at(5))}
+      onDaySelect={onDaySelect}
+    />,
+  );
+
+  fireEvent.click(dayCell(container, 5)?.querySelector('button') as HTMLButtonElement);
+
+  expect(onDaySelect).toHaveBeenCalledTimes(1);
+  expect(toDayKey(onDaySelect.mock.calls[0][0].getTime())).toBe(toDayKey(at(5)));
+  // The re-tap must not deselect: the highlight stays prop-driven.
+  expect(dayCell(container, 5)?.classList.contains('rdp-selected')).toBe(true);
+});
+
 it('highlights the selected day from props', () => {
   const { container } = render(<ControlledCalendar selectedDay={new Date(at(5))} />);
   expect(dayCell(container, 5)?.classList.contains('rdp-selected')).toBe(true);
