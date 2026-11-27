@@ -136,9 +136,14 @@ it('pruneHistory keeps the row exactly at the 48 h boundary and deletes older on
 it('pruneHistory keeps at most 50 rows per entry and leaves other entries alone', async () => {
   const id = await seedEntry();
   const other = await seedEntry('Anderer Eintrag');
+  const third = await seedEntry('Dritter Eintrag');
   for (let i = 0; i < 55; i++) {
     vi.advanceTimersByTime(1000);
     await db.entryHistory.add({ entryId: id, at: Date.now(), kind: 'text', text: `t${i}` });
+  }
+  for (let i = 0; i < 52; i++) {
+    vi.advanceTimersByTime(1000);
+    await db.entryHistory.add({ entryId: third, at: Date.now(), kind: 'text', text: `u${i}` });
   }
   await db.entryHistory.add({ entryId: other, at: Date.now(), kind: 'text', text: 't0' });
 
@@ -147,5 +152,8 @@ it('pruneHistory keeps at most 50 rows per entry and leaves other entries alone'
   expect(rows).toHaveLength(HISTORY_MAX_ROWS_PER_ENTRY);
   expect(rows[0].text).toBe('t5'); // the 5 oldest are gone
   expect(rows[HISTORY_MAX_ROWS_PER_ENTRY - 1].text).toBe('t54');
+  expect(await db.entryHistory.where('entryId').equals(third).count()).toBe(
+    HISTORY_MAX_ROWS_PER_ENTRY,
+  );
   expect(await db.entryHistory.where('entryId').equals(other).count()).toBe(1);
 });

@@ -82,18 +82,24 @@ async function pruneExpired(): Promise<void> {
   await db.entryHistory.where('at').below(cutoff).delete();
 }
 
-/** Cap the number of rows per entry, keeping the newest ones. */
+/** Cap the number of rows per entry, keeping the newest ones. Iterates per
+ * entry (keys-only queries) instead of loading the whole table — history rows
+ * can carry attachment blobs once the stash is wired into removal. */
 async function pruneOverflow(): Promise<void> {
-  const rows = await db.entryHistory.toArray();
-  const perEntry = new Map<number, number[]>();
-  for (const row of rows) {
-    const ids = perEntry.get(row.entryId) ?? [];
-    ids.push(row.id as number);
-    perEntry.set(row.entryId, ids);
-  }
-  for (const ids of perEntry.values()) {
-    const overflow = ids.length - HISTORY_MAX_ROWS_PER_ENTRY;
-    if (overflow > 0) await db.entryHistory.bulkDelete(ids.slice(0, overflow));
+  const entryIds = await db.entryHistory.orderBy('entryId').uniqueKeys();
+  for (const entryId of entryIds) {
+    const count = await db.entryHistory.where('entryId').equals(entryId).count();
+    const overflow = count - HISTORY_MAX_ROWS_PER_ENTRY;
+    if (overflow > 0) {
+      // Primary-key order within the index is oldest first, so the deleted
+      // rows are the oldest ones and the newest 50 are kept.
+      const staleIds = await db.entryHistory
+        .where('entryId')
+        .equals(entryId)
+        .limit(overflow)
+        .primaryKeys();
+      await db.entryHistory.bulkDelete(staleIds);
+    }
   }
 }
 
