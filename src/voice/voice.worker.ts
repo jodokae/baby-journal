@@ -6,7 +6,9 @@
  * Lifecycle discipline:
  * - Requests are processed strictly sequentially (single-threaded WASM anyway).
  * - After an idle timeout the pipeline is disposed to free its WASM memory;
- *   the next request transparently rebuilds it from the Cache API in seconds.
+ *   the next request — live chunk or final pass — transparently rebuilds it
+ *   from the Cache API in seconds, and every job cancels a pending idle
+ *   dispose at its start so a slow inference is never cut short.
  * - `abort` disposes immediately (the hook usually terminates the whole worker,
  *   this is the in-worker safety net).
  */
@@ -172,6 +174,9 @@ async function buildPipeline(id: number, announceReady: boolean): Promise<AsrPip
 }
 
 async function ensurePipeline(id: number) {
+  // Any incoming request proves activity: cancel a pending idle dispose so
+  // it cannot fire while the load (or a queued job) runs.
+  cancelIdleDispose();
   if (asr) {
     post({ type: 'ready', id });
     return;
@@ -180,14 +185,23 @@ async function ensurePipeline(id: number) {
 }
 
 async function transcribe(id: number, pcm: Float32Array, isFinal: boolean) {
+  // A slow inference (older devices; whisper-base is the default exactly for
+  // its quality) can outlive the 60 s idle timer armed by the PREVIOUS job:
+  // cancel it as the first statement so the pipeline is never disposed
+  // mid-inference. Worker internals are not jsdom-executable — the
+  // cancel-at-job-start and the rebuild below are verified by the device
+  // checklist; the main-thread half is pinned in transcriber.test.ts.
+  cancelIdleDispose();
   try {
     let model = asr;
     if (!model) {
-      // A late final pass can arrive after the idle dispose (>60 s without a
-      // request): rebuild the pipeline instead of failing the transcription
-      // with „Finale Transkription fehlgeschlagen“. Live chunks cannot
-      // outlive their session's load, so they still fail loudly.
-      if (!isFinal) throw new Error('pipeline not loaded');
+      // A request can arrive after the idle dispose (>60 s without a
+      // request): rebuild the pipeline instead of failing with
+      // 'pipeline not loaded'. announceReady=false keeps the rebuild from
+      // resolving any pending request as an empty result — the same
+      // mechanism as the late-final rebuild. Slow devices then degrade to
+      // slow-but-working (a seconds-long Cache API rebuild) instead of
+      // dropping every subsequent chunk.
       model = await buildPipeline(id, false);
       if (!model) return; // error already posted
     }

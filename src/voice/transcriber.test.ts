@@ -88,4 +88,20 @@ describe('createWorkerTranscriber', () => {
     await expect(chunkPromise).resolves.toBe('chunk text');
     await transcriber.dispose();
   });
+
+  it('keeps the worker and pending requests intact across an idle-disposed notice', async () => {
+    // The worker disposes its pipeline after 60 s idle and posts the notice.
+    // The rebuild happens INSIDE the worker (not jsdom-testable); this pins
+    // the main-thread half of that contract: the notice is informational —
+    // it must not reject the pending chunk request nor kill the worker, so
+    // the in-worker rebuild can still answer it.
+    const transcriber = createWorkerTranscriber();
+    const chunkPromise = transcriber.transcribeChunk(new Float32Array([1, 2, 3]));
+    const worker = FakeWorker.instances[0];
+    worker.onmessage?.(withData({ type: 'idle-disposed' }));
+    worker.onmessage?.(withData({ type: 'result', id: worker.posted[0].data.id, text: 'spät' }));
+    await expect(chunkPromise).resolves.toBe('spät');
+    expect(worker.terminated).toBe(false);
+    await transcriber.dispose();
+  });
 });
