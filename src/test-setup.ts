@@ -1,11 +1,16 @@
 import 'fake-indexeddb/auto';
 
-// jsdom does not implement object URLs; stub them for download-fallback tests.
+// jsdom polyfills, added guardedly (`if (!x)`) so parallel branches that add
+// the same stubs cannot double-define them after merge.
+
+// jsdom does not implement object URLs; stub them for download-fallback tests
+// and for blob-based thumbnail/lightbox previews.
 if (typeof URL.createObjectURL !== 'function') {
-  URL.createObjectURL = () => 'blob:stub';
+  let nextObjectId = 0;
+  URL.createObjectURL = (_obj: Blob | MediaSource) => `blob:fake-${nextObjectId++}`;
 }
 if (typeof URL.revokeObjectURL !== 'function') {
-  URL.revokeObjectURL = () => {};
+  URL.revokeObjectURL = (_url: string) => {};
 }
 
 // jsdom's Blob lacks the async read methods (arrayBuffer/text) used by the

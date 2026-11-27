@@ -15,6 +15,15 @@ export interface Attachment {
   kind: 'photo' | 'video' | 'audio';
   blob: Blob;
   createdAt: number;
+  // Type-only extension for photo attachments (non-indexed record properties —
+  // Dexie stores them without any schema change or version bump).
+  /** Re-encoded ~256 px JPEG thumbnail; absent when re-encoding failed. */
+  thumb?: Blob;
+  /** MIME type of `blob` ('image/jpeg' for re-encoded copies). */
+  mime?: string;
+  /** Pixel dimensions of `blob`. */
+  width?: number;
+  height?: number;
 }
 
 export interface Entry {
