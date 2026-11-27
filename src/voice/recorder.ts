@@ -186,6 +186,21 @@ export function createRecorder(): VoiceRecorder {
         context = null;
       }
       if (!context) context = new AudioContext();
+      // WebKit starts the context `suspended` when its construction crossed an
+      // await boundary (the permission prompt): the tap gesture no longer
+      // counts, and a suspended context never runs the worklet — zero audio
+      // chunks, a live microphone, and no error anywhere. Resume here, as
+      // close to the gesture as the code allows; addModule and node creation
+      // are legal on a suspended context, so building the graph afterwards is
+      // safe. Choice documented: resume BEFORE the graph build (shortest
+      // gesture→resume distance) plus a second attempt below, after the build.
+      if (context.state !== 'running') {
+        try {
+          await context.resume();
+        } catch {
+          // Re-checked below — a rejected resume surfaces as the state check.
+        }
+      }
       try {
         await context.audioWorklet.addModule(new URL('./pcm-worklet.js', import.meta.url));
       } catch (err) {
@@ -203,6 +218,21 @@ export function createRecorder(): VoiceRecorder {
       source.connect(node);
       node.connect(mute);
       mute.connect(context.destination);
+      // Verify the context actually runs before declaring capture active: a
+      // context stuck in 'suspended' must fail the start loudly (the German
+      // MIC_ERROR in useVoice) instead of dictating into silence.
+      if (context.state !== 'running') {
+        try {
+          await context.resume();
+        } catch {
+          // The state check below reports the failure.
+        }
+      }
+      if (context.state !== 'running') {
+        const state = context.state;
+        teardown();
+        throw new Error(`AudioContext ${state}`);
+      }
       active = true;
     },
 
