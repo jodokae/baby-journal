@@ -39,26 +39,20 @@ describe('getStorageInfo', () => {
     expect(await getStorageInfo()).toBeNull();
   });
 
-  it('reads usage, quota and persistence status', async () => {
+  it('reads the persistence status', async () => {
     mockStorage({
       estimate: vi.fn().mockResolvedValue({ usage: 5, quota: 100 }),
       persisted: vi.fn().mockResolvedValue(true),
     });
-    const info = await getStorageInfo();
-    expect(info?.usageBytes).toBe(5);
-    expect(info?.quotaBytes).toBe(100);
-    expect(info?.persisted).toBe(true);
+    expect((await getStorageInfo())?.persisted).toBe(true);
   });
 
-  it('leaves persisted undefined when only estimate is supported', async () => {
+  it('leaves persisted undefined when persisted() is unsupported', async () => {
     mockStorage({ estimate: vi.fn().mockResolvedValue({ usage: 1, quota: 2 }) });
-    const info = await getStorageInfo();
-    expect(info?.usageBytes).toBe(1);
-    expect(info?.quotaBytes).toBe(2);
-    expect(info?.persisted).toBeUndefined();
+    expect((await getStorageInfo())?.persisted).toBeUndefined();
   });
 
-  it('treats unsupported persisted() like a "not persisted" answer', async () => {
+  it("treats unsupported persisted() like a 'not persisted' answer", async () => {
     mockStorage({
       estimate: vi.fn().mockResolvedValue({ usage: 1, quota: 2 }),
       persisted: vi.fn().mockResolvedValue(false),

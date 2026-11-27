@@ -131,15 +131,17 @@ describe('BackupView import', () => {
     const { container } = render(<BackupView onBack={() => {}} />);
 
     pickFile(container, backupJson);
+    // The count from the backup appears in the confirmation dialog.
     expect(
       await screen.findByText(
-        /Bestehende Einträge werden gelöscht und durch das Backup ersetzt \(2 Einträge\)\. Wirklich importieren\?/,
+        'Bestehende Einträge werden gelöscht und durch das Backup ersetzt (2 Einträge).',
       ),
     ).toBeTruthy();
+    expect(screen.getByText('Wirklich importieren?')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Ja, importieren' }));
     expect(await screen.findByText('2 Einträge importiert.')).toBeTruthy();
-    expect(screen.queryByText(/Wirklich importieren/)).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
 
     const entries = await db.entries.toArray();
     expect(entries.map((entry) => entry.id).sort((a, b) => a! - b!)).toEqual([7, 42]);
@@ -158,7 +160,7 @@ describe('BackupView import', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('kein gültiges JSON');
-    expect(screen.queryByText(/Wirklich importieren/)).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(await db.entries.count()).toBe(1);
   });
 
@@ -178,9 +180,10 @@ describe('BackupView import', () => {
     const { container } = render(<BackupView onBack={() => {}} />);
 
     pickFile(container, backupJson);
+    // The dialog opens focused on the safe cancel button.
     fireEvent.click(await screen.findByRole('button', { name: 'Abbrechen' }));
 
-    expect(screen.queryByText(/Wirklich importieren/)).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
     const entries = await db.entries.toArray();
     expect(entries).toHaveLength(1);
     expect(entries[0]?.text).toBe('Alt');

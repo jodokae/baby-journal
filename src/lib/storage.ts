@@ -5,8 +5,6 @@
  */
 
 export interface StorageInfo {
-  usageBytes?: number;
-  quotaBytes?: number;
   persisted?: boolean;
 }
 
@@ -19,18 +17,14 @@ export function requestPersistentStorage(): Promise<boolean | undefined> {
 }
 
 /**
- * Reads usage/quota and persistence status. Returns null when
- * `navigator.storage.estimate` is unsupported (the whole storage section of
- * the backup view is then hidden).
+ * Reads the persistence status. Returns null when the StorageManager's
+ * estimate API is unsupported (the whole storage section of the backup view
+ * is then hidden); `persisted` stays undefined when `persisted()` itself is
+ * unsupported.
  */
 export async function getStorageInfo(): Promise<StorageInfo | null> {
   const storage = navigator.storage;
   if (!storage?.estimate) return null;
-  const estimate = await storage.estimate();
   const persisted = storage.persisted ? await storage.persisted() : undefined;
-  return {
-    usageBytes: estimate.usage,
-    quotaBytes: estimate.quota,
-    persisted,
-  };
+  return { persisted };
 }

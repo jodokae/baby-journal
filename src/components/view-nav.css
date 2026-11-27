@@ -1,0 +1,44 @@
+/* Shared view nav grid: floated back button on the left, centered title.
+   Used by the day view and the backup view (the same "‹ Zurück" + title
+   pattern); imported by both views. Per-component stylesheet (main.css is
+   frozen); reuses the app's CSS variables from main.css, so light/dark via
+   prefers-color-scheme works. Rules were moved here from day-editor.css,
+   where they had leaked past the day editor's scope. */
+
+.day-nav {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.back-button {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  /* „‹ Zurück" must stay on one line on narrow screens; the title truncates. */
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 0.75rem 0 0.25rem;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 1rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.day-title {
+  grid-column: 2;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: center;
+  /* Let the title shrink and truncate instead of pushing the nav wider. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
