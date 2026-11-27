@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mergeChunkTranscripts } from './dedup';
-import { createRecorder, type VoiceRecorder } from './recorder';
+import { createRecorder, SAMPLE_RATE, type VoiceRecorder } from './recorder';
 import { createWorkerTranscriber, type VoiceTranscriber } from './transcriber';
 
 export type VoicePhase = 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
@@ -51,8 +51,8 @@ const FINAL_ERROR =
   'Finale Transkription fehlgeschlagen – der bereits erkannte Text bleibt erhalten.';
 const EMPTY_AUDIO_ERROR =
   'Das Mikrofon liefert keine verwertbaren Audiodaten – bitte erneut versuchen.';
-/** Consecutive empty chunk results before dictation is failed loudly. */
-const EMPTY_CHUNK_ERROR_STREAK = 3;
+/** Seconds of continuously empty audio windows before dictation fails. */
+const EMPTY_AUDIO_SECONDS_LIMIT = 30;
 
 export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const [phase, setPhase] = useState<VoicePhase>('idle');
@@ -72,8 +72,13 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const queueRef = useRef<Float32Array[]>([]);
   const drainingRef = useRef(false);
   const mergedLiveRef = useRef('');
-  /** Consecutive empty chunk results — the "mic delivers nothing" detector. */
-  const emptyChunkStreakRef = useRef(0);
+  /**
+   * Seconds of consecutive empty chunk windows — the "mic delivers nothing"
+   * detector. Time-based (not result-count-based): near-silence during a
+   * thinking pause is NORMAL for hands-full dictation, only ~30 s of
+   * continuous emptiness is a real fault.
+   */
+  const emptyAudioSecondsRef = useRef(0);
 
   // Generation counter guarding in-flight async work against a concurrent
   // start()/cancel(): every continuation bails out if its session is stale.
@@ -106,9 +111,16 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
           const text = await transcriber().transcribeChunk(pcm);
           if (sessionRef.current !== session) continue;
           if (!text.trim()) {
-            emptyChunkStreakRef.current++;
-            if (emptyChunkStreakRef.current >= EMPTY_CHUNK_ERROR_STREAK) {
-              // Three consecutive empty results mean the microphone delivers
+            // A single empty result on near-silence is normal — a parent
+            // dictating hands-full thinks between sentences and Whisper
+            // returns nothing there. Only ~30 s of CONTINUOUS empty windows
+            // prove the microphone delivers nothing usable. The duration
+            // comes from the pcm window itself (no wall clock involved);
+            // windows overlap by 1 s, so this counts audio coverage slightly
+            // conservatively.
+            emptyAudioSecondsRef.current += pcm.length / SAMPLE_RATE;
+            if (emptyAudioSecondsRef.current >= EMPTY_AUDIO_SECONDS_LIMIT) {
+              // Thirty seconds of emptiness mean the microphone delivers
               // audio the model cannot use (e.g. a suspended or mis-clocked
               // context): fail loudly instead of dictating into infinite
               // silence. Disposing the recorder releases the mic and lets a
@@ -122,7 +134,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
             }
             continue;
           }
-          emptyChunkStreakRef.current = 0;
+          emptyAudioSecondsRef.current = 0;
           mergedLiveRef.current = mergeChunkTranscripts(mergedLiveRef.current, text);
           setLiveText(mergedLiveRef.current);
         } catch (err) {
@@ -188,7 +200,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     const session = sessionRef.current;
     queueRef.current = [];
     mergedLiveRef.current = '';
-    emptyChunkStreakRef.current = 0;
+    emptyAudioSecondsRef.current = 0;
     setLiveText('');
     setError(null);
     setProgress(0);
@@ -263,7 +275,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     recorder?.dispose();
     recorderRef.current = null;
     queueRef.current = [];
-    emptyChunkStreakRef.current = 0;
+    emptyAudioSecondsRef.current = 0;
     setPhaseRef('transcribing');
     void finalize(pcm);
   }, [finalize]);
@@ -274,7 +286,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     sessionRef.current++;
     queueRef.current = [];
     mergedLiveRef.current = '';
-    emptyChunkStreakRef.current = 0;
+    emptyAudioSecondsRef.current = 0;
     recorderRef.current?.dispose();
     recorderRef.current = null;
     void transcriberRef.current?.dispose();

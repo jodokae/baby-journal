@@ -178,17 +178,24 @@ describe('useVoice', () => {
     expect(result.current.phase).toBe('listening');
   });
 
-  it('surfaces three consecutive empty chunk results as an error', async () => {
-    // The round-2 report: mic active, „Ich höre zu …", nothing written, no
-    // console output. Whatever upstream break produces them, empty results
-    // must never stay invisible forever.
+  it('fails unusable audio only after 30 s of continuous empty windows', async () => {
+    // The round-2 report: mic active, status line stuck on listening,
+    // nothing written, no console output. Whatever upstream break produces
+    // them, empty results must never stay invisible forever — but a natural
+    // thinking pause (a couple of empty near-silence chunks) is normal for
+    // hands-full dictation and must not kill it. Chunks are 64_000 samples
+    // = 4 s of audio each; the old count-based streak of 3 aborted after
+    // ~9 s of silence.
     const { result, recorder, transcriber } = setup();
     await startToListening(result, transcriber);
 
-    transcriber.chunkResults = ['', '', ''];
-    act(() => recorder.emit(new Float32Array(64_000)));
-    act(() => recorder.emit(new Float32Array(64_000)));
-    act(() => recorder.emit(new Float32Array(64_000)));
+    const chunkSpy = vi.spyOn(transcriber, 'transcribeChunk');
+    transcriber.chunkResults = Array(8).fill('');
+    for (let i = 0; i < 7; i++) act(() => recorder.emit(new Float32Array(64_000)));
+    await waitFor(() => expect(chunkSpy).toHaveBeenCalledTimes(7));
+    expect(result.current.phase).toBe('listening'); // 28 s: still below the limit
+
+    act(() => recorder.emit(new Float32Array(64_000))); // 32 s cumulative
     await waitFor(() => expect(result.current.phase).toBe('error'));
     expect(result.current.error).toMatch('keine verwertbaren Audiodaten');
     // The recorder is released so the mic indicator goes dark and a retry
@@ -196,14 +203,28 @@ describe('useVoice', () => {
     expect(recorder.disposed).toBe(true);
   });
 
-  it('errors only after three consecutive empty results (non-empty resets the streak)', async () => {
+  it('survives a thinking pause: two empty chunks then speech keep listening', async () => {
+    const { result, recorder, transcriber } = setup();
+    await startToListening(result, transcriber);
+
+    transcriber.chunkResults = ['', '', 'endlich worte'];
+    act(() => recorder.emit(new Float32Array(64_000)));
+    act(() => recorder.emit(new Float32Array(64_000)));
+    act(() => recorder.emit(new Float32Array(64_000)));
+    await waitFor(() => expect(result.current.liveText).toBe('endlich worte'));
+    expect(result.current.phase).toBe('listening');
+  });
+
+  it('resets the accumulated emptiness on a non-empty result', async () => {
     const { result, recorder, transcriber } = setup();
     await startToListening(result, transcriber);
 
     const chunkSpy = vi.spyOn(transcriber, 'transcribeChunk');
-    transcriber.chunkResults = ['', '', 'text', '', ''];
-    for (let i = 0; i < 5; i++) act(() => recorder.emit(new Float32Array(64_000)));
-    await waitFor(() => expect(chunkSpy).toHaveBeenCalledTimes(5));
+    transcriber.chunkResults = ['', '', '', '', 'text', '', '', ''];
+    for (let i = 0; i < 8; i++) act(() => recorder.emit(new Float32Array(64_000)));
+    await waitFor(() => expect(chunkSpy).toHaveBeenCalledTimes(8));
+    // 16 s before the reset + 12 s after: each run stays under the limit,
+    // while the un-reset total (28 s + …) would have been judged failure.
     expect(result.current.phase).toBe('listening');
     expect(result.current.liveText).toBe('text');
   });
