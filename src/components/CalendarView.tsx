@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { DayPicker } from 'react-day-picker';
 import { de } from 'react-day-picker/locale';
 import 'react-day-picker/style.css';
+import './calendar.css';
 import { db } from '../db';
 import { daysWithEntries, groupEntriesByDay } from '../lib/calendar-query';
 import { monthRangeMs } from '../lib/dates';
@@ -53,9 +54,6 @@ export default function CalendarView({
         <button type="button" aria-label="Nächster Monat" onClick={() => shiftMonth(1)}>
           ›
         </button>
-        <button type="button" className="today-button" onClick={goToToday}>
-          Heute
-        </button>
       </div>
 
       <DayPicker
@@ -78,6 +76,12 @@ export default function CalendarView({
         modifiers={{ hasEntries: entryDays }}
         modifiersClassNames={{ hasEntries: 'has-entries' }}
       />
+
+      <div className="calendar-footer">
+        <button type="button" className="today-button" onClick={goToToday}>
+          Heute
+        </button>
+      </div>
     </section>
   );
 }

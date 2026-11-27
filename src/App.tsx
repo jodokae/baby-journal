@@ -4,13 +4,6 @@ import CalendarView from './components/CalendarView';
 import DayView from './components/DayView';
 import { useDailyBackupBanner } from './lib/useDailyBackupBanner';
 
-const dateFormatter = new Intl.DateTimeFormat('de-DE', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-});
-
 /**
  * Two screens, a plain state swap: the calendar (default) and the full-screen
  * view of one day. Month and selected day live here so they survive going back.
@@ -43,7 +36,6 @@ export default function App() {
                 💾
               </button>
             </div>
-            <p className="date">{dateFormatter.format(new Date())}</p>
           </header>
           {banner.visible && (
             <div className="backup-banner" role="status">

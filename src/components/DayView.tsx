@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { dayRangeMs } from '../lib/dates';
+import './day-view.css';
 import Composer from './Composer';
 
 const dayFormatter = new Intl.DateTimeFormat('de-DE', {
