@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Entry, type EntryHistoryRow } from '../db';
+import { db, type Attachment, type Entry, type EntryHistoryRow } from '../db';
 import { dayKeyToNoon, dayRangeMs, toDayKey } from '../lib/dates';
 import {
   HISTORY_RETENTION_MS,
@@ -8,6 +8,10 @@ import {
   snapshotBeforeOverwrite,
   snapshotText,
 } from '../lib/history';
+import { ingestImages, type IngestError } from '../lib/ingest';
+import { SUPPORTED_ACCEPT } from '../lib/media';
+import { AttachmentStrip } from './AttachmentStrip';
+import { Lightbox } from './Lightbox';
 import './day-editor.css';
 
 const dayFormatter = new Intl.DateTimeFormat('de-DE', {
@@ -93,6 +97,17 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
   const [text, setTextState] = useState(() => entry?.text ?? '');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Photo ingestion: true while ingestImages (plus the follow-up write) runs.
+  const [ingesting, setIngesting] = useState(false);
+  // Per-file errors of the LAST ingest only — not global state. The next
+  // ingest replaces them (an error-free ingest clears the list).
+  const [ingestErrors, setIngestErrors] = useState<IngestError[]>([]);
+  // Index of the photo shown in the lightbox, resolved against the CURRENT
+  // attachments on every render (`attachments[index] ?? null`): when the
+  // array changed underneath, an out-of-range index closes the lightbox
+  // instead of showing the wrong photo.
+  const [openPhotoIndex, setOpenPhotoIndex] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Rows of undo history for this entry within the retention window; 0 while
   // the query has not delivered yet (and for days without an entry).
@@ -205,6 +220,44 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
   }
 
   /**
+   * Appends ingested photos to the day's entry — creating it when the day has
+   * none (empty text is fine; a photo-only entry shows textarea + tiles).
+   * Runs through the serialized write chain with a fresh read, exactly like
+   * persistText: it can never race a pending save into a second entry.
+   */
+  function appendPhotos(photos: Attachment[]): Promise<void> {
+    if (photos.length === 0) return Promise.resolve();
+    const { start, end } = dayRangeMs(day);
+    return enqueueWrite(async () => {
+      const existing = await db.entries.where('createdAt').between(start, end, true, false).first();
+      if (existing && existing.id !== undefined) {
+        await db.entries.update(existing.id, {
+          attachments: [...(existing.attachments ?? []), ...photos],
+        });
+      } else {
+        // Same createdAt mapping as the text path: today keeps Date.now(),
+        // any other day (past or future) is anchored at local noon.
+        const dayKey = toDayKey(day.getTime());
+        const createdAt = dayKey === toDayKey(Date.now()) ? Date.now() : dayKeyToNoon(dayKey);
+        await db.entries.add({ createdAt, type: 'note', text: '', attachments: photos });
+      }
+    });
+  }
+
+  /** Ingests the picked files, reports per-file errors and stores the photos. */
+  async function handleFilesPicked(files: File[]): Promise<void> {
+    if (ingesting || files.length === 0) return;
+    setIngesting(true);
+    try {
+      const result = await ingestImages(files);
+      setIngestErrors(result.errors);
+      await appendPhotos(result.photos);
+    } finally {
+      setIngesting(false);
+    }
+  }
+
+  /**
    * Restores a text snapshot: replaces the editor content with the snapshot
    * text — after snapshotting the entry's stored text, so restoring is itself
    * undoable. Serialized through the write chain like every other write.
@@ -247,6 +300,26 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
         transcription, both reschedule the auto-save like a user edit.
       */}
       {micSlot?.({ appendText, setText: updateText, text })}
+      {/*
+        Current attachments of the entry (read-only while ingesting: pending
+        files only surface through the status line below until the write
+        lands and the liveQuery refreshes the strip).
+      */}
+      <AttachmentStrip attachments={entry?.attachments ?? []} onOpen={setOpenPhotoIndex} />
+      {ingesting && (
+        <p className="ingest-status" role="status">
+          Fotos werden verarbeitet …
+        </p>
+      )}
+      {ingestErrors.length > 0 && (
+        <ul className="ingest-errors" role="alert">
+          {ingestErrors.map((error) => (
+            <li key={error.fileName}>
+              {error.fileName}: {error.message}
+            </li>
+          ))}
+        </ul>
+      )}
       {confirmingDelete ? (
         <div className="delete-confirm">
           <p>Wirklich löschen?</p>
@@ -261,6 +334,15 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
         </div>
       ) : (
         <div className="day-actions">
+          <button
+            type="button"
+            aria-label="Foto hinzufügen"
+            title="Foto hinzufügen"
+            disabled={ingesting}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <span aria-hidden="true">📎</span>
+          </button>
           {historyCount ? (
             <button type="button" onClick={() => setHistoryOpen(true)}>
               Verlauf
@@ -283,6 +365,34 @@ function DayEditor({ day, entry, micSlot }: DayEditorProps) {
           onRestore={restoreTextRow}
         />
       )}
+      {/*
+        Hidden picker: opened by the 📎 button above. The value is reset
+        immediately after reading the files so re-picking the same file
+        fires another change event.
+      */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={SUPPORTED_ACCEPT}
+        multiple
+        hidden
+        onChange={(event) => {
+          const picked = Array.from(event.target.files ?? []);
+          event.target.value = '';
+          void handleFilesPicked(picked);
+        }}
+      />
+      {/*
+        Full-screen view of the tapped photo, resolved against the CURRENT
+        attachments (see openPhotoIndex): a removed photo closes the lightbox
+        instead of showing the wrong one.
+      */}
+      <Lightbox
+        attachment={
+          openPhotoIndex === null ? null : ((entry?.attachments ?? [])[openPhotoIndex] ?? null)
+        }
+        onClose={() => setOpenPhotoIndex(null)}
+      />
     </div>
   );
 }

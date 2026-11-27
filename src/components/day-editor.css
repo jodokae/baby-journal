@@ -104,6 +104,26 @@
   margin: 0;
 }
 
+/* --- Photo ingestion feedback --- */
+
+.ingest-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.ingest-errors {
+  list-style: none;
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  color: var(--danger);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
 /* --- Verlauf (48 h undo history) --- */
 
 .history-panel {

@@ -1,10 +1,15 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
-import { db, type Entry } from '../db';
+import { db, type Attachment, type Entry } from '../db';
 import { toDayKey } from '../lib/dates';
 import { stashRemovedAttachment } from '../lib/history';
+import { ingestImages, type IngestedPhoto } from '../lib/ingest';
 import DayView from './DayView';
+
+vi.mock('../lib/ingest', () => ({ ingestImages: vi.fn() }));
+
+const ingestImagesMock = vi.mocked(ingestImages);
 
 const now = new Date();
 
@@ -16,11 +21,35 @@ function noonOf(day: Date): number {
   return new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12).getTime();
 }
 
+function photoAttachment(mime = 'image/jpeg'): IngestedPhoto {
+  return {
+    kind: 'photo',
+    blob: new Blob(['photo-bytes'], { type: mime }),
+    createdAt: Date.now(),
+    thumb: new Blob(['thumb-bytes'], { type: 'image/jpeg' }),
+    mime,
+    width: 100,
+    height: 80,
+  };
+}
+
+function pickedFile(name = 'foto.jpg'): File {
+  return new File(['file-bytes'], name, { type: 'image/jpeg' });
+}
+
+/** Opens the hidden picker input with the given files (the 📎 button just clicks it). */
+function pickFiles(files: File[]) {
+  const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+  Object.defineProperty(input, 'files', { value: files, configurable: true });
+  fireEvent.change(input);
+}
+
 // Fake the clock and the debounce timers only. Dexie and fake-indexeddb
 // progress on real scheduling (immediates/microtasks), which stays untouched.
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
   vi.setSystemTime(now);
+  ingestImagesMock.mockReset();
   await db.entries.clear();
   await db.entryHistory.clear();
 });
@@ -83,8 +112,8 @@ async function settleUntil(check: () => boolean | Promise<boolean>, tries = 50) 
   expect(await check()).toBe(true);
 }
 
-async function seedEntry(text: string): Promise<number> {
-  return db.entries.add({ createdAt: Date.now(), type: 'note', text, attachments: [] });
+async function seedEntry(text: string, attachments: Attachment[] = []): Promise<number> {
+  return db.entries.add({ createdAt: Date.now(), type: 'note', text, attachments });
 }
 
 it('auto-saves a new entry about a second after the last change', async () => {
@@ -177,6 +206,134 @@ it('flushes a pending save when the editor unmounts', async () => {
   const all = await db.entries.toArray();
   expect(all).toHaveLength(1);
   expect(all[0].text).toBe('Noch nicht gespeichert');
+});
+
+it('creates a photo-only entry when a photo is picked on an entry-less day', async () => {
+  const attachment = photoAttachment();
+  ingestImagesMock.mockResolvedValue({ photos: [attachment], errors: [] });
+  await renderEditor();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Foto hinzufügen' }));
+  pickFiles([pickedFile()]);
+  await drain();
+
+  const all = await db.entries.toArray();
+  expect(all).toHaveLength(1); // exactly one entry — no race with any save
+  expect(all[0].text).toBe('');
+  expect(all[0].attachments).toHaveLength(1);
+  expect(all[0].attachments[0].kind).toBe('photo');
+  // NOTE: blob content is not comparable here — jsdom and fake-indexeddb
+  // live in different Blob realms, so a round-tripped blob comes back
+  // structurally cloned (assert shape only, as in history.test.ts).
+  expect(toDayKey(all[0].createdAt)).toBe(toDayKey(now.getTime()));
+  // The strip shows the stored photo.
+  expect(screen.getByRole('button', { name: 'Foto 1 öffnen' })).toBeTruthy();
+});
+
+it('anchors a photo-only entry for another day at local noon', async () => {
+  const yesterday = dayAt(-1);
+  ingestImagesMock.mockResolvedValue({ photos: [photoAttachment()], errors: [] });
+  await renderEditor(<DayView day={yesterday} onBack={vi.fn()} />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Foto hinzufügen' }));
+  pickFiles([pickedFile()]);
+  await drain();
+
+  const all = await db.entries.toArray();
+  expect(all).toHaveLength(1);
+  expect(all[0].createdAt).toBe(noonOf(yesterday));
+});
+
+it('appends picked photos to the existing entry without touching the text', async () => {
+  const id = await seedEntry('Tagestext');
+  ingestImagesMock.mockResolvedValue({
+    photos: [photoAttachment(), photoAttachment('image/png')],
+    errors: [],
+  });
+  await renderEditor();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Foto hinzufügen' }));
+  pickFiles([pickedFile('a.jpg'), pickedFile('b.jpg')]);
+  await drain();
+
+  const stored = await db.entries.get(id);
+  expect(stored?.text).toBe('Tagestext');
+  expect(stored?.attachments).toHaveLength(2);
+  expect(stored?.createdAt).toBe(Date.now()); // untouched — it anchors the day
+});
+
+it('shows per-file ingest errors and clears them on the next successful ingest', async () => {
+  ingestImagesMock.mockResolvedValue({
+    photos: [],
+    errors: [{ fileName: 'riesig.jpg', message: 'Das Foto ist zu groß (max. 10 MB).' }],
+  });
+  await renderEditor();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Foto hinzufügen' }));
+  pickFiles([pickedFile('riesig.jpg')]);
+  await drain();
+
+  expect(screen.getByRole('alert').textContent).toContain(
+    'riesig.jpg: Das Foto ist zu groß (max. 10 MB).',
+  );
+  // Only errors, no photos: nothing is written.
+  expect(await db.entries.count()).toBe(0);
+
+  // The next ingest replaces the errors — a clean one clears the list.
+  ingestImagesMock.mockResolvedValue({ photos: [], errors: [] });
+  fireEvent.click(screen.getByRole('button', { name: 'Foto hinzufügen' }));
+  pickFiles([pickedFile()]);
+  await drain();
+
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('disables the picker while ingestion is in flight', async () => {
+  let releaseIngest: (() => void) | undefined;
+  ingestImagesMock.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        releaseIngest = () => resolve({ photos: [photoAttachment()], errors: [] });
+      }),
+  );
+  await renderEditor();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Foto hinzufügen' }));
+  pickFiles([pickedFile()]);
+  const picker = screen.getByRole('button', { name: 'Foto hinzufügen' }) as HTMLButtonElement;
+  expect(picker.disabled).toBe(true);
+
+  releaseIngest?.();
+  await drain();
+  expect(picker.disabled).toBe(false);
+});
+
+it('opens the lightbox from a tile and closes it again', async () => {
+  await seedEntry('Mit Fotos', [photoAttachment(), photoAttachment('image/png')]);
+  await renderEditor();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Foto 2 öffnen' }));
+  expect(screen.getByRole('dialog', { name: 'Foto' })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Schließen' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+it('closes the lightbox when the opened photo no longer exists', async () => {
+  await seedEntry('Ein Foto', [photoAttachment()]);
+  const { rerender } = await renderEditor();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Foto 1 öffnen' }));
+  expect(screen.getByRole('dialog')).toBeTruthy();
+
+  // Attachments change underneath (here: entry reloaded without photos) —
+  // the stale index resolves to nothing and the lightbox closes itself.
+  await act(async () => {
+    await db.entries.update((await db.entries.toArray())[0].id as number, { attachments: [] });
+  });
+  rerender(<DayView day={now} onBack={vi.fn()} />);
+  await drain();
+  expect(screen.queryByRole('dialog')).toBeNull();
 });
 
 it('stores a past-day entry at local noon of that day', async () => {
