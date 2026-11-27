@@ -11,6 +11,11 @@
  *   this is the in-worker safety net).
  */
 import { env, pipeline } from '@huggingface/transformers';
+// NOTE: importing 'onnxruntime-web/*' directly works because the package is a
+// pinned (non-optional) dependency of @huggingface/transformers and npm hoists
+// it — it must NOT be added to this repo's package.json (it stays transitive,
+// and the transformers version pins the matching ORT build).
+//
 // Locally bundled ONNX Runtime assets (emitted into dist/assets by Vite): the
 // glue module and the WASM binary are served from our own origin, so the
 // jsDelivr CDN is never touched. Both keys together also activate
@@ -177,7 +182,10 @@ async function transcribe(id: number, pcm: Float32Array, isFinal: boolean) {
       : { language: 'german', task: 'transcribe' };
     const output = await asr(pcm, options);
     post({ type: 'result', id, text: output.text.trim() });
-    if (!isFinal) scheduleIdleDispose();
+    // After every completed transcription — live chunk or final pass — the
+    // pipeline becomes idle-disposable: the whisper-base WASM model must not
+    // stay resident (memory) while the user keeps editing the entry.
+    scheduleIdleDispose();
   } catch (err) {
     post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) });
   }
