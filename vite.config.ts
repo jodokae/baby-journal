@@ -19,6 +19,15 @@ import { VitePWA } from 'vite-plugin-pwa';
 // any future oversized dist asset still fails the build.
 export default defineConfig({
   base: '/baby-journal/',
+  // Dev-only remedy for dictation bug #1: the dedicated voice worker imports
+  // @huggingface/transformers, a dependency Vite's dep optimizer cannot
+  // discover from the entry graph (worker imports are not scanned). The first
+  // mic tap then hit an un-optimized import and Vite answered with a full
+  // "[vite] page reload" — kicking the user out of the day view mid-session.
+  // Pre-including it keeps the first tap reload-free. Cannot be covered by a
+  // unit test; acceptance is a fresh dev session (rm -rf node_modules/.vite)
+  // where the first mic tap logs no reload.
+  optimizeDeps: { include: ['@huggingface/transformers'] },
   plugins: [
     react(),
     VitePWA({
