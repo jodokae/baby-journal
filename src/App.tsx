@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Entry } from './db';
+import Composer from './components/Composer';
 
 const dateFormatter = new Intl.DateTimeFormat('de-DE', {
   weekday: 'long',
@@ -10,17 +11,11 @@ const dateFormatter = new Intl.DateTimeFormat('de-DE', {
 });
 const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
 
-export default function App() {
-  const [text, setText] = useState('');
-  const entries = useLiveQuery(() => db.entries.orderBy('createdAt').reverse().toArray(), []);
+type Tab = 'journal' | 'calendar';
 
-  async function addEntry(event: FormEvent) {
-    event.preventDefault();
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    await db.entries.add({ createdAt: Date.now(), type: 'note', text: trimmed, attachments: [] });
-    setText('');
-  }
+export default function App() {
+  const [tab, setTab] = useState<Tab>('journal');
+  const entries = useLiveQuery(() => db.entries.orderBy('createdAt').reverse().toArray(), []);
 
   return (
     <main className="app">
@@ -29,35 +24,48 @@ export default function App() {
         <p className="date">{dateFormatter.format(new Date())}</p>
       </header>
 
-      <form className="composer" onSubmit={addEntry}>
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Notiz für heute …"
-          aria-label="Neue Notiz"
-          maxLength={500}
-        />
-        <button type="submit" disabled={!text.trim()}>
-          Hinzufügen
+      <nav className="tabs" role="tablist" aria-label="Bereiche">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'journal'}
+          className="tab"
+          onClick={() => setTab('journal')}
+        >
+          Journal
         </button>
-      </form>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'calendar'}
+          className="tab"
+          onClick={() => setTab('calendar')}
+        >
+          Kalender
+        </button>
+      </nav>
 
-      <section aria-label="Einträge">
-        {entries === undefined ? (
-          <p className="empty">Lade …</p>
-        ) : entries.length === 0 ? (
-          <p className="empty">Noch keine Einträge – schreib die erste Notiz.</p>
-        ) : (
-          <ul className="entries">
-            {entries.map((entry: Entry) => (
-              <li key={entry.id} className="entry">
-                <time>{timeFormatter.format(entry.createdAt)}</time>
-                <span>{entry.text}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {tab === 'journal' ? (
+        <>
+          <Composer />
+          <section aria-label="Einträge">
+            {entries === undefined ? (
+              <p className="empty">Lade …</p>
+            ) : entries.length === 0 ? (
+              <p className="empty">Noch keine Einträge – schreib die erste Notiz.</p>
+            ) : (
+              <ul className="entries">
+                {entries.map((entry: Entry) => (
+                  <li key={entry.id} className="entry">
+                    <time>{timeFormatter.format(entry.createdAt)}</time>
+                    <span>{entry.text}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </>
+      ) : null}
     </main>
   );
 }
