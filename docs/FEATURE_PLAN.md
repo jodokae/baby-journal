@@ -1,7 +1,10 @@
-# Feature-Plan R2 — Baby-Tagebuch
+# Feature-Plan R3 — Baby-Tagebuch
 
-> **Stand:** 2026-11-27 · **Status:** vereinbart (R2) · **Basis:** Code-Analyse des aktuellen
+> **Stand:** 2026-11-27 · **Status:** vereinbart (R3) · **Basis:** Code-Analyse des aktuellen
 > Stands (Datei-/Zeilen-Referenzen im Text)
+
+**R3 (2026-11-27):** LLM-Aufräumung aus initialem Scope entfernt (Nutzerentscheid — ~10–30 s pro
+Verbesserungsklick erschienen zu teuer). Nachrüstung als eigener Job jederzeit möglich.
 
 Dieser Plan ist die dauerhafte, technische Referenz der vereinbarten Features — auch falls die
 planende Session verloren geht. Neue Entscheidungen ergänzen nur den Abschnitt
@@ -15,9 +18,9 @@ planende Session verloren geht. Neue Entscheidungen ergänzen nur den Abschnitt
   getestet (`src/db.test.ts:9-20`).
 - Die App ist aktuell add-only (Composer + Liste, `src/App.tsx`); die PWA ist komplett verdrahtet
   (`vite.config.ts`), noch ohne `runtimeCaching`.
-- Neue Dependencies (alle werden vorab in Job A installiert): `react-day-picker@^10.0.2`
-  (verifiziert, aktuelles Major ist v10), `@huggingface/transformers@^4.3.2`,
-  `@mlc-ai/web-llm@^0.2.89`.
+- Neue Dependencies (vorab in Job A installiert — nur diese zwei): `react-day-picker@^10.0.2`
+  (verifiziert) und `@huggingface/transformers@^4.3.2` (verifiziert). `@mlc-ai/web-llm` wird
+  **nicht** installiert (nicht im Scope, siehe Änderungslog).
 
 ## Feature 1 — Kalenderansicht (react-day-picker)
 
@@ -131,67 +134,53 @@ M (1,5–2 Tage).
 MIME-Branches mit gemockten `createImageBitmap`/Canvas, `estimate()`-Formatierung; manuell auf
 iPhone (HEIC!) und macOS; der Blob-Roundtrip-Test bleibt grün.
 
-## Feature 4 — On-Device Voice-to-Text (Deutsch, live) inkl. LLM-Aufräumung ⭐
+## Feature 4 — On-Device Voice-to-Text (Deutsch, live) ⭐
 
 ### Ziel & UX
 
 - Mikrofon-Button im Composer. Erster Tipp: Mikrofonfreigabe + einmaliger Whisper-Download
   (~78 MB) mit Fortschrittsbalken → „Modell bereit ✓“ (persistenter Marker). Live-Text während des
   Sprechens (Hybrid: ~4-s-Chunks mit 1-s-Überlappung + Dedup-Merge); nach dem Stopp finale
-  Voll-Transkription (bessere Qualität, restauriert Satzzeichen) + regelbasierte Aufräumung;
-  optional „✨ Verbessern“ → On-Device-LLM erzeugt einen überprüfbaren Vorschlag
-  (Übernehmen/Verwerfen). Kein Audio, kein Text verlässt das Gerät.
+  Voll-Transkription + regelbasierte Aufräumung (Stufe b). **Kein LLM-Schritt.** Kein Audio, kein
+  Text verlässt das Gerät.
 
 ### Technische Wahl
 
 - **Pipeline (modular, `src/voice/`):** `pcm-worklet.js` (AudioWorklet, Float32-PCM), `recorder.ts`
   (AudioContext 16 kHz + AudioWorklet, Chunks mit Überlappung, Fallback-Resampler),
   `transcriber.ts` (Transcriber-Interface: `load`/`transcribeChunk`/`transcribeFull`/`dispose`),
-  `voice.worker.ts` (transformers.js Whisper), `llm.worker.ts` (eigener WebLLM-Worker),
-  `cleanup.ts` (regelbasierte Aufräumung — konservative Füllwort-Liste: „ähm“, „äh“, „hm“ mit
-  Wortgrenzen; „also“/„quasi“ bewusst **NICHT**), `dedup.ts` (Überlappungs-Merge, reine Funktion),
-  `llm.ts` (Capability-Gate, Suggestion-Erzeugung, unload), `useVoice.ts` (Zustandsmaschine:
-  idle→loading→recording→finalizing→[improving→suggestion]→done).
+  `voice.worker.ts` (transformers.js Whisper), `cleanup.ts` (regelbasierte Aufräumung, siehe
+  „Regel-Aufräumung (Stufe b)“), `dedup.ts` (Überlappungs-Merge, reine Funktion), `useVoice.ts`
+  (Zustandsmaschine: idle→loading→recording→finalizing→done). **Kein `llm.ts`, kein
+  `llm.worker.ts`.**
+- **Nicht-blockierende finale Transkription:** Die finale Voll-Transkription läuft
+  **nicht-blockierend** — der Nutzer editiert weiter, das Ergebnis ersetzt den Live-Text, sobald
+  es fertig ist. Auf single-threaded WASM kann der Feinschliff bei langen Aufnahmen etwa so lang
+  wie die Aufnahme dauern; der ½-Tag-Spike auf dem Ziel-iPhone misst die realen Zahlen.
 - **Whisper:** `@huggingface/transformers`,
   `pipeline('automatic-speech-recognition', model, { dtype: 'q8', device: 'wasm' })`, multilingual,
-  `language: 'german'`. Modellwahl: whisper-base q8 (~75–80 MB, Default, ~Echtzeit auf A17 Pro),
-  tiny als Fallback-Option, small nur späteres Opt-in. WASM single-threaded (GitHub Pages ohne
-  COOP/COEP → kein SharedArrayBuffer) — der echte Performance-Engpass; WebGPU für Whisper
-  experimentell → automatischer WASM-Fallback.
-- **LLM-Aufräumung (im initialen Scope, kein Backlog):** `@mlc-ai/web-llm`, nur WebGPU; Empfehlung
-  Llama-3.2-1B-Instruct-q4f16 (~0,8–1,0 GB; Deutsch offiziell unterstützte Sprache;
-  Qwen2.5-1.5B/Qwen3-1.7B als Upgrade-Pfad). Erwartung A17 Pro: ~20–50 tok/s → Verbesserungslauf
-  (150–300 Output-Token) in ~5–15 s. Capability-Gate: `navigator.gpu` + Adapter-Feature
-  `shader-f16`; ohne Gate: dezenter Hinweis, regelbasierte Stufe bleibt aktiv.
-
-### Speicherdisziplin (Pflicht)
-
-- Whisper base q8 ~300–500 MB WASM-Heap; LLM ~0,7–1,2 GB zusätzlich; beides gleichzeitig ⇒ iOS
-  jetsam killt die PWA. Eigener LLM-Worker; Whisper **VOR** LLM-Load disposen (Worker terminiert,
-  Heap frei); nach Übernehmen/Verwerfen engine unload + Worker terminieren; erneutes Diktieren lädt
-  Whisper aus dem Cache neu (Sekunden). Reihenfolge per Zustandsmaschine erzwungen.
-
-### Sicherheit (nicht verhandelbar)
-
-- Das LLM überschreibt **nie stillschweigend** — Ausgabe als Vorschlagskarte mit
-  Übernehmen/Verwerfen, Original sichtbar; Prompt hart beschränkt (nur Rechtschreibung/Grammatik/
-  Interpunktion, keine Inhaltsänderung, nichts erfinden), `temperature: 0`. LLM-Load-Fehler →
-  automatischer Rückfall auf die Regel-Stufe.
+  `language: 'german'`. Modellwahl: whisper-base q8 (~75–80 MB, Default, ~Echtzeit-RTF auf A17 Pro
+  zu verifizieren), tiny als Fallback-Option, small nur späteres Opt-in. WASM single-threaded
+  (GitHub Pages ohne COOP/COEP → kein SharedArrayBuffer) — der echte Performance-Engpass; WebGPU
+  für Whisper experimentell → automatischer WASM-Fallback.
 
 ### Modell-Download & Caching
 
 - Die App enthält nur Modell-IDs; lazy beim ersten Einsatz (nicht beim App-Start) mit byte-genauem
-  Fortschritt; transformers.js cacht die Gewichte selbst im Cache-API-Speicher; WebLLM cacht in
-  einem eigenen Cache (Cache Storage, `useIndexedDBCache`-Option im Spike verifizieren) mit
-  separatem Erst-CTA inkl. Größenwarnung („einmalig ~1 GB, am besten WLAN“). Bereit-Marker
-  (`voiceModelReady`, `llmModelReady`) statt Netzwerk-Probe; `navigator.storage.persist()` deckt
-  beide Caches ab (Feature-Detect, ab ~iOS 17).
+  Fortschritt; transformers.js cacht die Gewichte selbst im Cache-API-Speicher. Bereit-Marker
+  (`voiceModelReady`) statt Netzwerk-Probe; `navigator.storage.persist()` deckt den Cache ab
+  (Feature-Detect, ab ~iOS 17).
 - Cache-Verlust-Szenarien: Website-Daten löschen, PWA vom Home-Screen entfernen, Nutzung im
   normalen Safari-Tab (7-Tage-ITP-Regel — gilt **NICHT** für installierte PWAs) → erkannt über
   Marker/`load()`-Fehler, einzelne Dateien werden nachgeladen.
 - Kein Workbox-`runtimeCaching` für huggingface.co (sonst Doppelspeicherung); `runtimeCaching` nur
-  für das ORT-Runtime-CDN (jsdelivr, CacheFirst); Precache bleibt klein
-  (App-Shell/Bundles/Icons).
+  für das ORT-Runtime-CDN (jsdelivr, CacheFirst); Precache bleibt klein (App-Shell/Bundles/Icons).
+
+### Regel-Aufräumung (Stufe b)
+
+- Unverändert: konservative Füllwort-Liste — „ähm“, „äh“, „hm“ mit Wortgrenzen; „also“/„quasi“
+  bewusst **NICHT**. Greift nur auf der finalen Transkription (nicht auf dem Live-Text); Feature
+  umschaltbar.
 
 ### iOS-Feinheiten
 
@@ -201,76 +190,81 @@ iPhone (HEIC!) und macOS; der Blob-Roundtrip-Test bleibt grün.
 
 ### Aufwand
 
-L — 6–9 Tage inkl. ½-Tag-Spike (Whisper-Tempo/Größe, dann LLM: Laden, tok/s, Deutschqualität auf
-dem iPhone).
+L — 4–6 Tage inkl. ½-Tag-Spike. Hauptrisiken: Single-Thread-WASM-Tempo, Chunk-Artefakte (der
+Hybrid-Ansatz federt), erster Download über Mobilfunk (WLAN-Hinweis).
 
 ### Akzeptanzkriterien
 
-- Lazy erster Download mit Fortschritt → Marker → komplett offline (Flugmodus); Live-Text + finale
-  Voll-Transkription + Regel-Aufräumung (umschaltbar); Capability-Gate mit Fallback; Whisper
-  disposet **VOR** LLM-Load, nie beide geladen (per Design); Suggestion-UX ohne stilles
-  Überschreiben; Downloads nur beim ersten Einsatz mit Warn-CTA; Prompt-Beschränkung + Temperatur
-  0; kein Netzwerk außer Downloads (Audit); Unterbrechungen sauber; Fakes injizierbar.
+- Lazy erster Download mit Fortschritt → Marker → komplett offline (Flugmodus); Live-Text +
+  nicht-blockierende finale Voll-Transkription + Regel-Aufräumung (Stufe b, umschaltbar); keine
+  Netzwerkanfragen außer den Modell-Downloads (Audit); Unterbrechungen sauber; Fakes injizierbar.
 
 ### Teststrategie
 
-- `dedup`/`cleanup` als reine Funktionen; `useVoice`-Zustandsmaschine mit Fake-Recorder/Transcriber/
-  LLM inkl. Dispose-Reihenfolge-Test, Gate-Fallback (`navigator.gpu` gemockt), LLM-Fehler →
-  Rückfall auf Stufe (b), Marker-Logik, Resampler; manuell auf dem iPhone: Ladezeit/Größe,
-  Chunk-Latenz, Qualität tiny vs. base, LLM-tok/s + Deutschqualität (feste Beispielsätze),
-  Flugmodus, Unterbrechungen, Eviction → Neu-Download.
+- `dedup`/`cleanup` als reine Funktionen; `useVoice`-Zustandsmaschine mit Fake-Recorder/
+  Fake-Transcriber (Lade-/Fehlerzustände, Retry), Resampler, Marker-Logik; manuell auf dem iPhone:
+  Ladezeit, Chunk-Latenz, Qualität tiny vs. base, Flugmodus, Unterbrechungen, Eviction →
+  Neu-Download.
 
 ## Phasen & Aufwand
 
-| Phase | Inhalt                                                                                             | Tage  |
-| ----- | -------------------------------------------------------------------------------------------------- | ----- |
-| 0     | Fundament: alle 3 Deps, Tab-Shell, Composer-Slots, `src/lib/dates.ts` (+Tests) — kein `db.ts`-Diff | 0,5–1 |
-| 1     | Journal-CRUD                                                                                       | 0,5–1 |
-| 2     | Kalender (react-day-picker, Mini-Spike Tag 1)                                                      | 1–1,5 |
-| 3     | Bild-Anhänge                                                                                       | 1,5–2 |
-| 4     | Voice komplett (Spike + Whisper + Caching + Stufe b + LLM)                                         | 6–9   |
-| 5     | Integration & Polish, manueller iOS-Durchgang                                                      | 0,5   |
+| Phase | Inhalt                                                                                                | Tage  |
+| ----- | ----------------------------------------------------------------------------------------------------- | ----- |
+| 0     | Fundament: nur die 2 Deps, Tab-Shell, Composer-Slots, `src/lib/dates.ts` (+Tests) — kein `db.ts`-Diff | 0,5–1 |
+| 1     | Journal-CRUD                                                                                          | 0,5–1 |
+| 2     | Kalender (react-day-picker, Mini-Spike Tag 1)                                                         | 1–1,5 |
+| 3     | Bild-Anhänge                                                                                          | 1,5–2 |
+| 4     | Voice komplett (Spike + Whisper + Caching + Stufe b)                                                  | 4–6   |
+| 5     | Integration & Polish, manueller iOS-Durchgang                                                         | 0,5   |
 
-Gesamt ≈ 10–15 Fokustage (eher 12–13).
+Gesamt ≈ 8–11 Fokustage (eher ~10).
 
 ## Job-Split (parallelisierbar)
 
-- **Job A „Fundament + Deps“** (zuerst, allein; ~0,5–1 d): `package.json`/Lockfile (3 Deps),
-  App-Shell (Tabs), Composer-Slots, `dates.ts` + Tests. Danach fassen B/C/D `package.json` nie an.
+- **Job A „Fundament + Deps“** (zuerst, allein; ~0,5–1 d): `package.json`/Lockfile — nur die zwei
+  Deps (`react-day-picker` + `@huggingface/transformers`) — App-Shell (Tabs), Composer-Slots,
+  `dates.ts` + Tests. Danach fassen B/C/D `package.json` nie an.
 - **Job B „Kalender“** (~1–1,5 d): `CalendarView.tsx`, `calendar-query.ts` + Tests, CSS-Overrides.
 - **Job C „CRUD + Fotos“** (~2–3 d): `EntryList`/`EntryCard`/`PhotoPicker`/Lightbox, `photos.ts` +
   Tests, `storage.ts`.
-- **Job D „Voice“** (~6–9 d): `src/voice/*`, `MicButton` (micSlot), exklusiv `vite.config.ts`
+- **Job D „Voice“** (~4–6 d): `src/voice/*`, `MicButton` (micSlot), exklusiv `vite.config.ts`
   (`runtimeCaching` nur ORT-CDN).
 - `src/db.ts` wird von keinem Job geändert. Merge-Reihenfolge B/C/D frei; Phase 5 verkabelt die
   Slots + manueller iOS-Durchgang.
 
 ## Plattform-Matrix
 
-| Feature                           | iOS Safari (PWA, Ziel)                                      | macOS Safari | macOS Chrome/Firefox         |
-| --------------------------------- | ----------------------------------------------------------- | ------------ | ---------------------------- |
-| Kalender (react-day-picker), CRUD | ✓                                                           | ✓            | ✓                            |
-| Fotos (nativer Picker)            | ✓ (HEIC→JPEG, Fallback)                                     | ✓            | ✓ (HEIC evtl. Platzhalter)   |
-| File System Access API            | ✗ (nicht genutzt)                                           | ✗            | nur Chromium (nicht genutzt) |
-| Voice WASM q8                     | ✓ (AudioWorklet iOS 14.5+)                                  | ✓            | ✓                            |
-| Voice WebGPU                      | nur iOS 26+ (experimentell) → Fallback WASM                 | wie links    | experimentell                |
-| LLM-Verbesserung                  | iOS 26+ (WebGPU + `shader-f16`), sonst Fallback Regel-Stufe | Safari 26+ ✓ | Chromium ✓ (experimentell)   |
-| storage.estimate/persist          | ab ~iOS 17 (Feature-Detect)                                 | ✓            | ✓                            |
+| Feature                           | iOS Safari (PWA, Ziel)                                            | macOS Safari | macOS Chrome/Firefox         |
+| --------------------------------- | ----------------------------------------------------------------- | ------------ | ---------------------------- |
+| Kalender (react-day-picker), CRUD | ✓                                                                 | ✓            | ✓                            |
+| Fotos (nativer Picker)            | ✓ (HEIC→JPEG, Fallback)                                           | ✓            | ✓ (HEIC evtl. Platzhalter)   |
+| File System Access API            | ✗ (nicht genutzt)                                                 | ✗            | nur Chromium (nicht genutzt) |
+| Voice WASM q8                     | ✓ (AudioWorklet iOS 14.5+)                                        | ✓            | ✓                            |
+| Voice WebGPU                      | nur iOS 26+ (experimentell) → Fallback WASM                       | wie links    | experimentell                |
+| LLM-Verbesserung                  | nicht im initialen Scope — Nachrüstung erfordert WebGPU (iOS 26+) | wie links    | Chromium ✓ (experimentell)   |
+| storage.estimate/persist          | ab ~iOS 17 (Feature-Detect)                                       | ✓            | ✓                            |
 
 ## Datenschutz
 
 - **Netzwerkaufrufe:** (1) statisches Laden von GitHub Pages (danach Service Worker); (2)
-  einmaliger Whisper-Download (~78 MB, huggingface.co/LFS-CDN) plus kleine ONNX-Runtime-Dateien
-  (jsdelivr); (3) einmaliger, optionaler LLM-Download (~0,8–1,3 GB, mit Größenwarnung). Beide
-  Modelle gecacht → danach vollständig offline. Mehr gibt es nicht: kein Tracking, keine Analytics,
-  kein Server.
+  einmaliger Whisper-Download (~78 MB, huggingface.co/LFS-CDN) plus kleine ORT-Runtime-Dateien
+  (jsdelivr). Gecacht → danach vollständig offline. Mehr gibt es nicht: kein Tracking, keine
+  Analytics, kein Server. Ein späteres, optionales LLM würde einen weiteren einmaligen Download
+  (~1 GB) bedeuten — nicht im aktuellen Scope.
 - **Verlässt das Gerät nie:** Audio, Transkript, Einträge, Fotos, IndexedDB-/Cache-Inhalte. Whisper
-  (WASM), Regel-Aufräumung (in-process) und LLM (WebGPU, eigener Worker) laufen komplett lokal.
+  (WASM) und die Regel-Aufräumung (in-process) laufen komplett lokal.
 - **Web Speech API ausgeschlossen** (sendet Audio an Apple-Server). iOS-Tastatur-Diktat ist
   OS-Ebene (außerhalb der App), eigene Abwägung. Fotos werden nur lokal gelesen/verkleinert, nie
   hochgeladen.
 
 ## Entscheidungen & FAQ
+
+### Entscheidungslog
+
+- **2026-11-27 — LLM-Aufräumung aus dem initialen Scope entfernt (Nutzerentscheid).** Die
+  per-Nutzungs-Latenz (Modell-Load aus Cache Sekunden bis ~20 s plus ~5–15 s Generierung) erschien
+  zu teuer. Das regelbasierte Aufräumen (Stufe b) ist der Default. Nachrüstung als eigener Job
+  jederzeit möglich — die Design-Entscheidungen dafür bleiben unten als Referenz dokumentiert.
 
 ### Foto-Kopie & Rückverfolgbarkeit
 
@@ -287,12 +281,25 @@ späteren Foto-Job.)
 
 ### Modell-Laden & Performance
 
-Drei Ebenen sauber getrennt:
+Drei Ebenen sauber getrennt (für Whisper):
 
-1. **Download** — genau einmal (~78 MB Whisper, ~0,8–1,3 GB LLM), gecacht, danach offline.
-2. **Laden in den Speicher** (RAM/GPU) bei jeder Nutzung aus dem lokalen Cache (Whisper wenige
-   Sekunden, LLM Sekunden bis ~20 s mit Spinner) — Netzwerk passiert dabei keines.
+1. **Download** — genau einmal (~78 MB), gecacht, danach offline.
+2. **Laden in den Speicher** bei jeder Nutzung aus dem lokalen Cache — wenige Sekunden; Netzwerk
+   passiert dabei keines.
 3. **App-Start lädt GAR NICHT** (nur winziger Bereit-Marker lesen → null Performance-Impact).
 
-Dispose-Disziplin (Whisper vor LLM-Load entladen, LLM nach Gebrauch unload) ist der Preis dafür,
-dass iOS die PWA nicht wegen Speicherdruck killt.
+Gelten für ein späteres LLM dieselben Prinzipien (Dispose-Disziplin, eigener Worker,
+Bestätigungs-UX).
+
+### Nachrüst-Referenz: LLM-Aufräumung (nicht im Scope)
+
+Essenzielle Design-Entscheidungen für die spätere Nachrüstung (als eigener Job):
+
+- `@mlc-ai/web-llm`, nur WebGPU; Capability-Gate: `navigator.gpu` + Adapter-Feature `shader-f16`.
+- Empfehlung: Llama-3.2-1B-Instruct-q4f16 (~0,8–1,0 GB; Deutsch offiziell unterstützte Sprache);
+  Qwen 1,5B-Klasse als Upgrade-Pfad.
+- Eigener LLM-Worker; Whisper **VOR** LLM-Load disposen (sonst killt iOS jetsam die PWA); nach
+  Gebrauch engine unload + Worker terminieren.
+- Suggestion-UX mit Übernehmen/Verwerfen — das LLM überschreibt **nie stillschweigend**; Prompt nur
+  Rechtschreibung/Grammatik/Interpunktion (nichts erfinden), `temperature: 0`.
+- Erwartung A17 Pro: ~20–50 tok/s.
