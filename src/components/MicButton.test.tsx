@@ -166,18 +166,66 @@ describe('MicButton', () => {
   });
 
   it('cancels dictation when the entry text was cleared (e.g. submitted)', () => {
-    const helpers = { appendText: vi.fn(), setText: vi.fn(), text: '' };
+    // The entry already had text when dictation was running.
+    const helpers = { appendText: vi.fn(), setText: vi.fn(), text: 'Vorheriger Text' };
     useVoiceMock.mockReturnValue(voiceState());
     const { rerender } = render(<MicButton {...helpers} />);
 
-    // Listening with an empty entry text: there is nothing to dictate into
-    // (the entry was submitted or cleared), so the session must end instead
-    // of dictating into the next entry.
     const listeningVoice = voiceState({ phase: 'listening', liveText: 'erste worte' });
     useVoiceMock.mockReturnValue(listeningVoice);
     rerender(<MicButton {...helpers} />);
     expect(helpers.appendText).toHaveBeenCalledWith('erste worte');
-    expect(listeningVoice.cancel).toHaveBeenCalled();
+
+    // The entry had text before and it was submitted, clearing the composer:
+    // a non-empty → empty transition while listening ends the session.
+    const gone = voiceState({ phase: 'listening' });
+    useVoiceMock.mockReturnValue(gone);
+    rerender(<MicButton {...{ ...helpers, text: '' }} />);
+    expect(gone.cancel).toHaveBeenCalled();
+  });
+
+  it('keeps dictating into an empty entry after the first live chunk', () => {
+    // Dictation always starts in an empty composer. The first mirrored chunk
+    // lands in a state update the same commit's guard effect still sees as
+    // `text === ''` — that must NOT read as "cleared after submit".
+    const helpers = { appendText: vi.fn(), setText: vi.fn(), text: '' };
+    useVoiceMock.mockReturnValue(voiceState());
+    const { rerender } = render(<MicButton {...helpers} />);
+
+    const listening = voiceState({ phase: 'listening', liveText: 'erste worte' });
+    useVoiceMock.mockReturnValue(listening);
+    rerender(<MicButton {...helpers} />);
+    expect(helpers.appendText).toHaveBeenCalledWith('erste worte');
+    expect(listening.cancel).not.toHaveBeenCalled();
+
+    // Once the text has landed, the session continues normally.
+    const stillListening = { ...helpers, text: 'erste worte' };
+    const advanced = voiceState({ phase: 'listening', liveText: 'erste worte' });
+    useVoiceMock.mockReturnValue(advanced);
+    rerender(<MicButton {...stillListening} />);
+    expect(advanced.cancel).not.toHaveBeenCalled();
+  });
+
+  it('restarts the live mirror cleanly after cancelling a previous session', () => {
+    const helpers = { appendText: vi.fn(), setText: vi.fn(), text: 'Notiz erste worte' };
+    useVoiceMock.mockReturnValue(voiceState({ phase: 'transcribing', liveText: 'erste worte' }));
+    const { rerender } = render(<MicButton {...helpers} />);
+    expect(helpers.appendText).toHaveBeenCalledWith('erste worte');
+    helpers.appendText.mockClear();
+
+    // Cancelled: back to idle with the old mirror state still around.
+    const idle = voiceState();
+    useVoiceMock.mockReturnValue(idle);
+    rerender(<MicButton {...helpers} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Diktat starten' }));
+    expect(idle.start).toHaveBeenCalled();
+
+    // A new session must mirror from zero — the stale prefix would otherwise
+    // make `startsWith` reject the whole new live text.
+    const listening = voiceState({ phase: 'listening', liveText: 'neue worte' });
+    useVoiceMock.mockReturnValue(listening);
+    rerender(<MicButton {...helpers} />);
+    expect(helpers.appendText).toHaveBeenCalledWith('neue worte');
   });
 
   it('exposes the status region as aria-live', () => {

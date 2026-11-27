@@ -29,6 +29,11 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
   // merged live text is single-space word joins, which is exactly how it lands
   // in the composer — so `lastIndexOf` can find and later replace it.
   const appendedLiveRef = useRef('');
+  // Whether the composer had text during this session. The cleared-entry guard
+  // must not confuse "cleared after submit" with "not yet populated": the
+  // first mirrored chunk lands in an update that the same render's guard
+  // effect still sees as `text === ''`.
+  const hadTextRef = useRef(false);
 
   const voice = useVoice({
     onFinal: (finalText) => {
@@ -36,6 +41,15 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
       swapAppendedFor(cleaned);
     },
   });
+
+  // (Re)starts dictation from idle/error with a clean mirror state — without
+  // this a cancelled session's stale prefix would break the startsWith-based
+  // mirroring of the next session.
+  function startDictation() {
+    appendedLiveRef.current = '';
+    hadTextRef.current = text.trim().length > 0;
+    voice.start();
+  }
 
   /**
    * Replaces the appended live text with `finalText` in the entry. Falls back
@@ -79,8 +93,15 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
 
   // A submitted (or fully cleared) entry ends the dictation session: without
   // this the next live chunk would land in the composer for the NEXT entry.
+  // Only a non-empty → empty transition counts — dictating starts in an empty
+  // composer and its first mirrored chunk arrives in an update the guard
+  // still sees as empty.
   useEffect(() => {
-    if (text === '' && appendedLiveRef.current !== '' && voice.phase !== 'idle') {
+    if (text !== '') hadTextRef.current = true;
+  }, [text]);
+  useEffect(() => {
+    if (text === '' && hadTextRef.current && voice.phase !== 'idle') {
+      hadTextRef.current = false;
       appendedLiveRef.current = '';
       voice.cancel();
     }
@@ -111,12 +132,12 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
     case 'error':
       label = 'Erneut versuchen';
       status = voice.error ?? '';
-      action = voice.start;
+      action = startDictation;
       break;
     case 'idle':
       label = 'Diktat starten';
       status = voice.modelReady ? 'Modell bereit ✓' : '';
-      action = voice.start;
+      action = startDictation;
       break;
   }
 
