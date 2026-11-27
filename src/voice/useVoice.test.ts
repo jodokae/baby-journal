@@ -210,6 +210,17 @@ describe('useVoice', () => {
     expect(transcriber.disposed).toBe(true);
   });
 
+  it('unmount during loading disposes recorder and transcriber (guaranteed stop)', async () => {
+    // The mic button no longer cancels on tap while loading — leaving the day
+    // view is the way out, so the unmount cleanup must dispose everything.
+    const { result, recorder, transcriber, unmount } = setup();
+    act(() => result.current.start());
+    await waitFor(() => expect(transcriber.loadCalls).toBe(1));
+    unmount();
+    expect(recorder.disposed).toBe(true);
+    expect(transcriber.disposed).toBe(true);
+  });
+
   it('stops cleanly on visibilitychange while listening', async () => {
     const { result, recorder, transcriber, onFinal } = setup();
     await startToListening(result, transcriber);
@@ -224,6 +235,28 @@ describe('useVoice', () => {
     expect(recorder.stopped).toBe(true);
     await waitFor(() => expect(onFinal).toHaveBeenCalledWith('Endtext.'));
 
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+  });
+
+  it('keeps loading through a visibilitychange (download continues hidden)', async () => {
+    // Hiding the tab mid-download must not cancel: minutes of model download
+    // would be destroyed. The unmount cleanup still stops everything when the
+    // day view is left.
+    const { result, recorder, transcriber } = setup();
+    act(() => result.current.start());
+    await waitFor(() => expect(transcriber.loadCalls).toBe(1));
+
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(result.current.phase).toBe('loading');
+    expect(transcriber.disposed).toBe(false);
+    expect(recorder.disposed).toBe(false);
+
+    // The load still finishes and dictation proceeds normally.
+    act(() => transcriber.resolveLoad());
+    await waitFor(() => expect(result.current.phase).toBe('listening'));
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
   });
 

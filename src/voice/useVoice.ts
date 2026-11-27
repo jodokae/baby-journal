@@ -148,10 +148,9 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     setPhase(next);
   }
 
-  // Keeps stop()/cancel() reachable from callbacks registered earlier (the
-  // recorder's auto-stop fires with a closure from start(), for example).
+  // Keeps stop() reachable from callbacks registered earlier (the recorder's
+  // auto-stop fires with a closure from start(), for example).
   const stopRef = useRef<() => void>(() => {});
-  const cancelRef = useRef<() => void>(() => {});
 
   const start = useCallback(() => {
     if (
@@ -252,17 +251,17 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     setError(null);
     setPhaseRef('idle');
   }, []);
-  cancelRef.current = cancel;
 
   // Screen lock or incoming call while dictating: stop cleanly and keep what
   // was recognized (the final pass still runs for the captured audio).
+  // While LOADING nothing is cancelled: the model download continues fine in
+  // a hidden tab, and leaving the day view (unmount) still disposes the
+  // recorder and the worker.
   useEffect(() => {
     function onVisibilityChange() {
       if (document.visibilityState !== 'hidden') return;
       if (phaseRef.current === 'listening') {
         stopRef.current();
-      } else if (phaseRef.current === 'loading') {
-        cancelRef.current();
       }
     }
     document.addEventListener('visibilitychange', onVisibilityChange);

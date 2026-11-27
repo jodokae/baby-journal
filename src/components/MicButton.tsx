@@ -119,7 +119,11 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
     case 'loading':
       label = `Modell wird geladen … ${loadingPercent}`;
       status = firstDownload ? '~77 MB – am besten über WLAN' : '';
-      action = voice.cancel;
+      // Tapping during the download must NOT cancel: the label already
+      // reports progress and a cancel would destroy minutes of download plus
+      // queued audio. Leaving the day view (unmount) remains the guaranteed
+      // stop — useVoice disposes recorder and worker there.
+      action = () => {};
       break;
     case 'listening':
       label = 'Aufnahme stoppen';
@@ -151,6 +155,8 @@ export default function MicButton({ appendText, setText, text }: MicSlotHelpers)
         onClick={action}
         aria-label={label}
         aria-busy={voice.phase === 'loading' || voice.phase === 'transcribing'}
+        aria-disabled={voice.phase === 'loading'}
+        title={voice.phase === 'loading' ? 'Lädt … bitte warten' : undefined}
       >
         <span aria-hidden="true">🎙️</span>
         {label}

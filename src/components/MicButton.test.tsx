@@ -61,10 +61,13 @@ describe('MicButton', () => {
     expect(screen.getByText('~77 MB – am besten über WLAN')).toBeTruthy();
   });
 
-  it('aborts when tapped during loading', () => {
+  it('ignores a tap during loading (a cancel would destroy the download)', () => {
     const { voice } = renderMic({ phase: 'loading', progress: 0.1, modelReady: true });
-    fireEvent.click(screen.getByRole('button', { name: /Modell wird geladen/ }));
-    expect(voice.cancel).toHaveBeenCalled();
+    const button = screen.getByRole('button', { name: /Modell wird geladen/ });
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.getAttribute('title')).toBe('Lädt … bitte warten');
+    fireEvent.click(button);
+    expect(voice.cancel).not.toHaveBeenCalled();
   });
 
   it('stops the recording when listening', () => {
