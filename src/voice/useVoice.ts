@@ -187,6 +187,12 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
         );
       } catch (err) {
         console.warn('recorder failed', err);
+        // A start() throw can land AFTER the permission grant (worklet or
+        // context failure): dispose so the live microphone is released and
+        // a retry builds a fresh instance — mirroring the load-failure
+        // branch below.
+        recorderRef.current?.dispose();
+        recorderRef.current = null;
         if (sessionRef.current !== session) return;
         setPhaseRef('error');
         setError(MIC_ERROR);

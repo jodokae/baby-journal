@@ -200,6 +200,29 @@ describe('useVoice', () => {
     expect(result.current.error).toMatch('Mikrofon konnte nicht gestartet werden');
   });
 
+  it('disposes the recorder when start() throws and retries with a fresh one', async () => {
+    // A start() throw can land AFTER the permission grant (worklet or context
+    // failure): the leaked instance would keep the microphone live and a
+    // retry would silently no-op on the still-active old recorder.
+    const recorders = [new FakeRecorder(), new FakeRecorder()];
+    const transcriber = new FakeTranscriber();
+    let next = 0;
+    const hook = renderHook(() =>
+      useVoice({
+        createRecorderInstance: () => recorders[next++],
+        createTranscriberInstance: () => transcriber,
+      }),
+    );
+    recorders[0].startError = new Error('worklet failed');
+    act(() => hook.result.current.start());
+    await waitFor(() => expect(hook.result.current.phase).toBe('error'));
+    expect(recorders[0].disposed).toBe(true);
+
+    // The failed instance is dropped: the retry must start a fresh one.
+    act(() => hook.result.current.start());
+    await waitFor(() => expect(recorders[1].started).toBe(true));
+  });
+
   it('abort mid-load disposes recorder and transcriber', async () => {
     const { result, recorder, transcriber } = setup();
     act(() => result.current.start());
